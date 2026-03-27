@@ -78,23 +78,33 @@ else
   die "No GitHub auth found.\n   Run: gh auth login\n   Or:  export GITHUB_TOKEN=<token>"
 fi
 
-# Downloads a repo as a tarball into a temp directory, returns the temp dir path.
+# Downloads a repo as a tarball into a temp directory, returns the temp dir path via stdout.
+# Returns non-zero and prints a human-readable error to stderr on failure.
 # Caller is responsible for rm -rf on the returned path.
-# All diagnostic output goes to stderr so stdout is clean for the path return value.
 download_tarball() {
   local repo="$1" branch="$2"
   local tmpdir
   tmpdir=$(mktemp -d)
 
   log "Downloading $repo@$branch..." >&2
+
+  local dl_ok=true
   if [[ "$USE_GH" == "true" ]]; then
-    gh api "repos/$repo/tarball/$branch" > "$tmpdir/repo.tar.gz"
+    gh api "repos/$repo/tarball/$branch" > "$tmpdir/repo.tar.gz" 2>/dev/null || dl_ok=false
   else
     curl -fsSL \
       -H "Authorization: Bearer $GITHUB_TOKEN" \
       -H "Accept: application/vnd.github.v3+json" \
       "https://api.github.com/repos/$repo/tarball/$branch" \
-      -o "$tmpdir/repo.tar.gz"
+      -o "$tmpdir/repo.tar.gz" 2>/dev/null || dl_ok=false
+  fi
+
+  # GitHub returns a JSON error body (not a tarball) when the repo is inaccessible.
+  if [[ "$dl_ok" == "false" ]] || ! tar -tzf "$tmpdir/repo.tar.gz" &>/dev/null; then
+    rm -rf "$tmpdir"
+    echo -e "${RED}ERROR:${NC} Could not download $repo — no access or repo not found." >&2
+    echo -e "       Check your GitHub auth or request access to the repo." >&2
+    return 1
   fi
 
   mkdir -p "$tmpdir/repo"
@@ -103,63 +113,59 @@ download_tarball() {
 }
 
 # Downloads a single file's raw content via GitHub API.
+# Returns non-zero silently on failure (caller decides how to handle).
 download_file_content() {
   local repo="$1" path="$2" branch="$3"
   if [[ "$USE_GH" == "true" ]]; then
-    gh api "repos/$repo/contents/$path?ref=$branch" --jq '.content' | base64 --decode
+    gh api "repos/$repo/contents/$path?ref=$branch" --jq '.content' 2>/dev/null | base64 --decode
   else
     curl -fsSL \
       -H "Authorization: Bearer $GITHUB_TOKEN" \
-      "https://raw.githubusercontent.com/$repo/$branch/$path"
+      "https://raw.githubusercontent.com/$repo/$branch/$path" 2>/dev/null
   fi
 }
 
-# ── Step 1: Remove AFV skills from Skills/ ────────────────────────────────────
-step "Step 1: Removing existing AFV skills from Skills/..."
-mkdir -p "$SKILLS_DIR"
-
-# We'll identify which skill directories to remove after downloading the library.
-# First pass: capture current skill names from the library.
-TMPDIR_LIBRARY=$(download_tarball "$AFV_LIBRARY_REPO" "$AFV_LIBRARY_BRANCH")
-
-LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
-if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
-  rm -rf "$TMPDIR_LIBRARY"
-  die "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $AFV_LIBRARY_REPO"
-fi
-
-removed_count=0
-while IFS= read -r -d '' skill_dir; do
-  skill_name=$(basename "$skill_dir")
-  target="$SKILLS_DIR/$skill_name"
-  if [[ -d "$target" ]]; then
-    rm -rf "$target"
-    info "Removed: $skill_name"
-    ((removed_count++))
-  fi
-done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
-
-if [[ $removed_count -eq 0 ]]; then
-  info "No matching AFV skills found to remove (Skills/ may already be clean)"
-else
-  log "Removed $removed_count AFV skill(s)"
-fi
-
-# ── Step 2: Copy skills from afv-library ─────────────────────────────────────
+# ── Steps 1 & 2: Remove old + install fresh AFV skills ───────────────────────
+step "Step 1: Removing existing AFV skills from Skills-Salesforce/..."
 step "Step 2: Installing skills from $AFV_LIBRARY_REPO..."
 mkdir -p "$SKILLS_DIR"
 
-copied_count=0
-while IFS= read -r -d '' skill_dir; do
-  skill_name=$(basename "$skill_dir")
-  target="$SKILLS_DIR/$skill_name"
-  cp -r "$skill_dir" "$target"
-  info "Installed: $skill_name"
-  ((copied_count++))
-done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
+TMPDIR_LIBRARY=""
+if ! TMPDIR_LIBRARY=$(download_tarball "$AFV_LIBRARY_REPO" "$AFV_LIBRARY_BRANCH"); then
+  warn "Skipping skills update — could not access $AFV_LIBRARY_REPO"
+  warn "Request access at: https://github.com/$AFV_LIBRARY_REPO"
+else
+  LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
+  if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
+    rm -rf "$TMPDIR_LIBRARY"
+    warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $AFV_LIBRARY_REPO — skipping skills update"
+  else
+    # Step 1: remove existing skills whose names match the library
+    removed_count=0
+    while IFS= read -r -d '' skill_dir; do
+      skill_name=$(basename "$skill_dir")
+      target="$SKILLS_DIR/$skill_name"
+      if [[ -d "$target" ]]; then
+        rm -rf "$target"
+        info "Removed: $skill_name"
+        ((removed_count++))
+      fi
+    done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
+    [[ $removed_count -eq 0 ]] && info "No existing AFV skills to remove" || log "Removed $removed_count AFV skill(s)"
 
-rm -rf "$TMPDIR_LIBRARY"
-log "Installed $copied_count skill(s) to: $SKILLS_DIR"
+    # Step 2: install fresh copies
+    copied_count=0
+    while IFS= read -r -d '' skill_dir; do
+      skill_name=$(basename "$skill_dir")
+      cp -r "$skill_dir" "$SKILLS_DIR/$skill_name"
+      info "Installed: $skill_name"
+      ((copied_count++))
+    done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
+
+    rm -rf "$TMPDIR_LIBRARY"
+    log "Installed $copied_count skill(s) to: $SKILLS_DIR"
+  fi
+fi
 
 # ── Step 3: Rules from cline-fork ─────────────────────────────────────────────
 step "Step 3: Attempting to fetch rules from $CLINE_FORK_REPO..."
