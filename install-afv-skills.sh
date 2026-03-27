@@ -140,18 +140,15 @@ else
     rm -rf "$TMPDIR_LIBRARY"
     warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $AFV_LIBRARY_REPO — skipping skills update"
   else
-    # Step 1: remove existing skills whose names match the library
+    # Step 1: remove all existing skills in the directory
     removed_count=0
     while IFS= read -r -d '' skill_dir; do
       skill_name=$(basename "$skill_dir")
-      target="$SKILLS_DIR/$skill_name"
-      if [[ -d "$target" ]]; then
-        rm -rf "$target"
-        info "Removed: $skill_name"
-        ((removed_count++))
-      fi
-    done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
-    [[ $removed_count -eq 0 ]] && info "No existing AFV skills to remove" || log "Removed $removed_count AFV skill(s)"
+      rm -rf "$skill_dir"
+      info "Removed: $skill_name"
+      ((removed_count++))
+    done < <(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+    [[ $removed_count -eq 0 ]] && info "No existing skills to remove" || log "Removed $removed_count skill(s)"
 
     # Step 2: install fresh copies
     copied_count=0
