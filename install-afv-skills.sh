@@ -5,6 +5,7 @@
 #
 # Usage:
 #   bash install-afv-skills.sh
+#   bash install-afv-skills.sh --local /path/to/afv-library
 #   curl -fsSL <url-to-this-script> | bash
 #
 # Auth: requires `gh` CLI (logged in) OR GITHUB_TOKEN env var set.
@@ -18,6 +19,25 @@ info() { echo -e "${BLUE}   ·${NC} $*"; }
 warn() { echo -e "${YELLOW}WARN:${NC} $*"; }
 die()  { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 step() { echo -e "\n${GREEN}━━${NC} $*"; }
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+LOCAL_LIBRARY_PATH=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --local)
+      [[ -z "${2:-}" ]] && die "--local requires a path argument"
+      LOCAL_LIBRARY_PATH="$2"
+      shift 2
+      ;;
+    *)
+      die "Unknown argument: $1\nUsage: bash install-afv-skills.sh [--local /path/to/afv-library]"
+      ;;
+  esac
+done
+
+if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
+  [[ -d "$LOCAL_LIBRARY_PATH" ]] || die "Local path does not exist: $LOCAL_LIBRARY_PATH"
+fi
 
 # ── Dependency check ──────────────────────────────────────────────────────────
 # Tools not available on macOS by default:
@@ -74,6 +94,8 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
   USE_GH=true
 elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
   USE_GH=false
+elif [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
+  warn "No GitHub auth found — rules update from $CLINE_FORK_REPO will be skipped"
 else
   die "No GitHub auth found.\n   Run: gh auth login\n   Or:  export GITHUB_TOKEN=<token>"
 fi
@@ -127,41 +149,54 @@ download_file_content() {
 
 # ── Steps 1 & 2: Remove old + install fresh AFV skills ───────────────────────
 step "Step 1: Removing existing AFV skills from Skills-Salesforce/..."
-step "Step 2: Installing skills from $AFV_LIBRARY_REPO..."
 mkdir -p "$SKILLS_DIR"
 
+LIBRARY_SKILLS_PATH=""
 TMPDIR_LIBRARY=""
-if ! TMPDIR_LIBRARY=$(download_tarball "$AFV_LIBRARY_REPO" "$AFV_LIBRARY_BRANCH"); then
-  warn "Skipping skills update — could not access $AFV_LIBRARY_REPO"
-  warn "Request access at: https://github.com/$AFV_LIBRARY_REPO"
-else
-  LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
+
+if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
+  step "Step 2: Installing skills from local path: $LOCAL_LIBRARY_PATH..."
+  LIBRARY_SKILLS_PATH="$LOCAL_LIBRARY_PATH/$AFV_SKILLS_SUBDIR"
   if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
-    rm -rf "$TMPDIR_LIBRARY"
-    warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $AFV_LIBRARY_REPO — skipping skills update"
-  else
-    # Step 1: remove all existing skills in the directory
-    removed_count=0
-    while IFS= read -r -d '' skill_dir; do
-      skill_name=$(basename "$skill_dir")
-      rm -rf "$skill_dir"
-      info "Removed: $skill_name"
-      ((removed_count++))
-    done < <(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
-    [[ $removed_count -eq 0 ]] && info "No existing skills to remove" || log "Removed $removed_count skill(s)"
-
-    # Step 2: install fresh copies
-    copied_count=0
-    while IFS= read -r -d '' skill_dir; do
-      skill_name=$(basename "$skill_dir")
-      cp -r "$skill_dir" "$SKILLS_DIR/$skill_name"
-      info "Installed: $skill_name"
-      ((copied_count++))
-    done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
-
-    rm -rf "$TMPDIR_LIBRARY"
-    log "Installed $copied_count skill(s) to: $SKILLS_DIR"
+    die "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $LOCAL_LIBRARY_PATH"
   fi
+else
+  step "Step 2: Installing skills from $AFV_LIBRARY_REPO..."
+  if ! TMPDIR_LIBRARY=$(download_tarball "$AFV_LIBRARY_REPO" "$AFV_LIBRARY_BRANCH"); then
+    warn "Skipping skills update — could not access $AFV_LIBRARY_REPO"
+    warn "Request access at: https://github.com/$AFV_LIBRARY_REPO"
+  else
+    LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
+    if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
+      rm -rf "$TMPDIR_LIBRARY"
+      warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $AFV_LIBRARY_REPO — skipping skills update"
+      LIBRARY_SKILLS_PATH=""
+    fi
+  fi
+fi
+
+if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
+  # Step 1: remove all existing skills in the directory
+  removed_count=0
+  while IFS= read -r -d '' skill_dir; do
+    skill_name=$(basename "$skill_dir")
+    rm -rf "$skill_dir"
+    info "Removed: $skill_name"
+    ((removed_count++))
+  done < <(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+  [[ $removed_count -eq 0 ]] && info "No existing skills to remove" || log "Removed $removed_count skill(s)"
+
+  # Step 2: install fresh copies
+  copied_count=0
+  while IFS= read -r -d '' skill_dir; do
+    skill_name=$(basename "$skill_dir")
+    cp -r "$skill_dir" "$SKILLS_DIR/$skill_name"
+    info "Installed: $skill_name"
+    ((copied_count++))
+  done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
+
+  [[ -n "$TMPDIR_LIBRARY" ]] && rm -rf "$TMPDIR_LIBRARY"
+  log "Installed $copied_count skill(s) to: $SKILLS_DIR"
 fi
 
 # ── Step 3: Rules from cline-fork ─────────────────────────────────────────────

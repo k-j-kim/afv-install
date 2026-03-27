@@ -34,3 +34,19 @@ Or download and run locally:
 ```bash
 bash install-afv-skills.sh
 ```
+
+### Install from a local repo
+
+If you have a local clone of `afv-library`, you can install skills directly from it:
+
+```bash
+bash install-afv-skills.sh --local /path/to/afv-library
+```
+
+Or via curl (use `bash -s --` to pass arguments through the pipe):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/k-j-kim/afv-install/main/install-afv-skills.sh | bash -s -- --local /path/to/afv-library
+```
+
+This skips the GitHub download for skills and copies from the local `skills/` subdirectory instead. The rules update from `cline-fork` still runs if GitHub auth is available.
