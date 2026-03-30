@@ -115,7 +115,6 @@ AFV_SKILLS_SUBDIR="skills"
 
 SF_PLUGIN_REPOS=(
   "salesforcecli/plugin-templates"
-  "forcedotcom/source-deploy-retrieve"
 )
 SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 
