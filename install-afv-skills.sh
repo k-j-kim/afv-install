@@ -67,6 +67,22 @@ check_deps() {
     fi
   fi
 
+  if ! command -v code &>/dev/null; then
+    missing+=("code (VS Code CLI) →  Install VS Code and add 'code' to PATH")
+  fi
+
+  if ! command -v sf &>/dev/null; then
+    missing+=("sf (Salesforce CLI) →  npm install -g @salesforce/cli")
+  fi
+
+  if ! command -v node &>/dev/null; then
+    if $IS_MACOS; then
+      missing+=("node             →  brew install node")
+    else
+      missing+=("node             →  https://nodejs.org/en/download/package-manager")
+    fi
+  fi
+
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo -e "${RED}ERROR:${NC} Missing required dependencies:" >&2
     for m in "${missing[@]}"; do
@@ -76,6 +92,9 @@ check_deps() {
   fi
 }
 check_deps
+
+# ── Script directory (for locating bundled files like vsix/) ──────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 if $IS_MACOS; then
@@ -89,6 +108,12 @@ RULES_DIR="$EINSTEIN_DIR/Rules"
 AFV_LIBRARY_REPO="forcedotcom/afv-library"
 AFV_LIBRARY_BRANCH="main"
 AFV_SKILLS_SUBDIR="skills"
+
+SF_PLUGIN_REPOS=(
+  "salesforcecli/plugin-templates"
+  "forcedotcom/source-deploy-retrieve"
+)
+SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 
 CLINE_FORK_REPO="forcedotcom/cline-fork"
 CLINE_FORK_BRANCH="agenticChat"
@@ -164,21 +189,39 @@ download_file_content() {
   fi
 }
 
-# ── Steps 1 & 2: Remove old + install fresh AFV skills ───────────────────────
-step "Step 1: Removing existing AFV skills from Skills-Salesforce/..."
+# ── Step 1: Install VSIX extensions ──────────────────────────────────────────
+VSIX_DIR="$SCRIPT_DIR/vsix"
+if [[ -d "$VSIX_DIR" ]]; then
+  step "Step 1: Installing VS Code extensions from vsix/..."
+  vsix_count=0
+  for vsix_file in "$VSIX_DIR"/*.vsix; do
+    [[ -f "$vsix_file" ]] || continue
+    vsix_name=$(basename "$vsix_file")
+    log "Installing $vsix_name..."
+    code --install-extension "$vsix_file" --force || { warn "Failed to install $vsix_name"; continue; }
+    info "Installed: $vsix_name"
+    ((vsix_count++))
+  done
+  log "Installed $vsix_count VSIX extension(s)"
+else
+  warn "No vsix/ directory found at $VSIX_DIR — skipping VSIX installation"
+fi
+
+# ── Steps 2 & 3: Remove old + install fresh AFV skills ───────────────────────
+step "Step 2: Removing existing AFV skills from Skills-Salesforce/..."
 mkdir -p "$SKILLS_DIR"
 
 LIBRARY_SKILLS_PATH=""
 TMPDIR_LIBRARY=""
 
 if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
-  step "Step 2: Installing skills from local path: $LOCAL_LIBRARY_PATH..."
+  step "Step 3: Installing skills from local path: $LOCAL_LIBRARY_PATH..."
   LIBRARY_SKILLS_PATH="$LOCAL_LIBRARY_PATH/$AFV_SKILLS_SUBDIR"
   if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
     die "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $LOCAL_LIBRARY_PATH"
   fi
 else
-  step "Step 2: Installing skills from $AFV_LIBRARY_REPO..."
+  step "Step 3: Installing skills from $AFV_LIBRARY_REPO..."
   if ! TMPDIR_LIBRARY=$(download_tarball "$AFV_LIBRARY_REPO" "$AFV_LIBRARY_BRANCH"); then
     warn "Skipping skills update — could not access $AFV_LIBRARY_REPO"
     warn "Request access at: https://github.com/$AFV_LIBRARY_REPO"
@@ -193,7 +236,7 @@ else
 fi
 
 if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
-  # Step 1: remove all existing skills in the directory
+  # Step 2: remove all existing skills in the directory
   removed_count=0
   while IFS= read -r -d '' skill_dir; do
     skill_name=$(basename "$skill_dir")
@@ -203,7 +246,7 @@ if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
   done < <(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
   [[ $removed_count -eq 0 ]] && info "No existing skills to remove" || log "Removed $removed_count skill(s)"
 
-  # Step 2: install fresh copies
+  # Step 3: install fresh copies
   copied_count=0
   while IFS= read -r -d '' skill_dir; do
     skill_name=$(basename "$skill_dir")
@@ -216,8 +259,8 @@ if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
   log "Installed $copied_count skill(s) to: $SKILLS_DIR"
 fi
 
-# ── Step 3: Rules from cline-fork ─────────────────────────────────────────────
-step "Step 3: Attempting to fetch rules from $CLINE_FORK_REPO..."
+# ── Step 4: Rules from cline-fork ─────────────────────────────────────────────
+step "Step 4: Attempting to fetch rules from $CLINE_FORK_REPO..."
 mkdir -p "$RULES_DIR"
 
 TS_CONTENT=""
@@ -280,8 +323,59 @@ else
   warn "Skipping rules update — Skills installation still succeeded"
 fi
 
+# ── Step 5: Clone, build, and link SF plugin repos ─────────────────────────
+step "Step 5: Setting up local SF plugin repos..."
+mkdir -p "$SF_PLUGINS_DIR"
+
+for plugin_repo in "${SF_PLUGIN_REPOS[@]}"; do
+  plugin_name="${plugin_repo##*/}"
+  plugin_dir="$SF_PLUGINS_DIR/$plugin_name"
+
+  if [[ -d "$plugin_dir/.git" ]]; then
+    log "Updating existing clone: $plugin_name"
+    git -C "$plugin_dir" fetch origin && git -C "$plugin_dir" reset --hard origin/main || {
+      warn "Failed to update $plugin_name — removing and re-cloning"
+      rm -rf "$plugin_dir"
+    }
+  fi
+
+  if [[ ! -d "$plugin_dir" ]]; then
+    log "Cloning $plugin_repo..."
+    if [[ "$USE_GH" == "true" ]]; then
+      gh repo clone "$plugin_repo" "$plugin_dir" -- --depth 1 || {
+        warn "Could not clone $plugin_repo — skipping"
+        continue
+      }
+    else
+      git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${plugin_repo}.git" "$plugin_dir" || {
+        warn "Could not clone $plugin_repo — skipping"
+        continue
+      }
+    fi
+  fi
+
+  log "Installing dependencies for $plugin_name..."
+  if [[ -f "$plugin_dir/yarn.lock" ]]; then
+    (cd "$plugin_dir" && yarn install --frozen-lockfile) || { warn "yarn install failed for $plugin_name — skipping"; continue; }
+  else
+    (cd "$plugin_dir" && npm ci) || { warn "npm ci failed for $plugin_name — skipping"; continue; }
+  fi
+
+  log "Building $plugin_name..."
+  if [[ -f "$plugin_dir/yarn.lock" ]]; then
+    (cd "$plugin_dir" && yarn build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
+  else
+    (cd "$plugin_dir" && npm run build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
+  fi
+
+  log "Linking $plugin_name to sf CLI..."
+  sf plugins link "$plugin_dir" || { warn "Failed to link $plugin_name"; continue; }
+  info "Linked: $plugin_name"
+done
+
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 log "Done!"
-echo "   Skills dir : $SKILLS_DIR"
-echo "   Rules dir  : $RULES_DIR"
+echo "   Skills dir  : $SKILLS_DIR"
+echo "   Rules dir   : $RULES_DIR"
+echo "   Plugins dir : $SF_PLUGINS_DIR"
