@@ -94,7 +94,11 @@ check_deps() {
 check_deps
 
 # ── Script directory (for locating bundled files like vsix/) ──────────────────
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+SCRIPT_DIR=""
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-$0}"
+if [[ "$SCRIPT_SOURCE" != "/dev/stdin" && "$SCRIPT_SOURCE" != "bash" && "$SCRIPT_SOURCE" != "-" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+fi
 
 # ── Config ────────────────────────────────────────────────────────────────────
 if $IS_MACOS; then
@@ -114,6 +118,9 @@ SF_PLUGIN_REPOS=(
   "forcedotcom/source-deploy-retrieve"
 )
 SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
+
+INSTALL_REPO="k-j-kim/afv-install"
+INSTALL_REPO_BRANCH="main"
 
 CLINE_FORK_REPO="forcedotcom/cline-fork"
 CLINE_FORK_BRANCH="agenticChat"
@@ -190,9 +197,28 @@ download_file_content() {
 }
 
 # ── Step 1: Install VSIX extensions ──────────────────────────────────────────
-VSIX_DIR="$SCRIPT_DIR/vsix"
-if [[ -d "$VSIX_DIR" ]]; then
-  step "Step 1: Installing VS Code extensions from vsix/..."
+step "Step 1: Installing VS Code extensions from vsix/..."
+
+VSIX_DIR=""
+TMPDIR_VSIX=""
+
+# Try local vsix/ first (running from a clone), otherwise download from repo
+if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/vsix" ]]; then
+  VSIX_DIR="$SCRIPT_DIR/vsix"
+else
+  log "Downloading vsix/ from $INSTALL_REPO..."
+  if TMPDIR_VSIX=$(download_tarball "$INSTALL_REPO" "$INSTALL_REPO_BRANCH"); then
+    if [[ -d "$TMPDIR_VSIX/repo/vsix" ]]; then
+      VSIX_DIR="$TMPDIR_VSIX/repo/vsix"
+    else
+      warn "No vsix/ directory found in $INSTALL_REPO — skipping VSIX installation"
+    fi
+  else
+    warn "Could not download $INSTALL_REPO — skipping VSIX installation"
+  fi
+fi
+
+if [[ -n "$VSIX_DIR" ]]; then
   vsix_count=0
   for vsix_file in "$VSIX_DIR"/*.vsix; do
     [[ -f "$vsix_file" ]] || continue
@@ -203,9 +229,9 @@ if [[ -d "$VSIX_DIR" ]]; then
     ((vsix_count++))
   done
   log "Installed $vsix_count VSIX extension(s)"
-else
-  warn "No vsix/ directory found at $VSIX_DIR — skipping VSIX installation"
 fi
+
+[[ -n "$TMPDIR_VSIX" ]] && rm -rf "$TMPDIR_VSIX"
 
 # ── Steps 2 & 3: Remove old + install fresh AFV skills ───────────────────────
 step "Step 2: Removing existing AFV skills from Skills-Salesforce/..."
