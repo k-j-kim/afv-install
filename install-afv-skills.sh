@@ -20,6 +20,14 @@ warn() { echo -e "${YELLOW}WARN:${NC} $*"; }
 die()  { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 step() { echo -e "\n${GREEN}━━${NC} $*"; }
 
+# ── OS detection ─────────────────────────────────────────────────────────────
+OS="$(uname -s)"
+case "$OS" in
+  Darwin) IS_MACOS=true  ;;
+  Linux)  IS_MACOS=false ;;
+  *)      die "Unsupported OS: $OS" ;;
+esac
+
 # ── Argument parsing ─────────────────────────────────────────────────────────
 LOCAL_LIBRARY_PATH=""
 while [[ $# -gt 0 ]]; do
@@ -40,18 +48,23 @@ if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
 fi
 
 # ── Dependency check ──────────────────────────────────────────────────────────
-# Tools not available on macOS by default:
-#   gh      — GitHub CLI:  brew install gh
-#   python3 — Python 3:    brew install python  (or: xcode-select --install)
 check_deps() {
   local missing=()
 
   if ! command -v gh &>/dev/null; then
-    missing+=("gh (GitHub CLI)  →  brew install gh")
+    if $IS_MACOS; then
+      missing+=("gh (GitHub CLI)  →  brew install gh")
+    else
+      missing+=("gh (GitHub CLI)  →  https://github.com/cli/cli/blob/trunk/docs/install_linux.md")
+    fi
   fi
 
   if ! command -v python3 &>/dev/null; then
-    missing+=("python3          →  brew install python  OR  xcode-select --install")
+    if $IS_MACOS; then
+      missing+=("python3          →  brew install python  OR  xcode-select --install")
+    else
+      missing+=("python3          →  sudo apt install python3  OR  sudo dnf install python3")
+    fi
   fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
@@ -65,7 +78,11 @@ check_deps() {
 check_deps
 
 # ── Config ────────────────────────────────────────────────────────────────────
-EINSTEIN_DIR="$HOME/Library/Application Support/Code/User/globalStorage/salesforce.salesforcedx-einstein-gpt"
+if $IS_MACOS; then
+  EINSTEIN_DIR="$HOME/Library/Application Support/Code/User/globalStorage/salesforce.salesforcedx-einstein-gpt"
+else
+  EINSTEIN_DIR="$HOME/.config/Code/User/globalStorage/salesforce.salesforcedx-einstein-gpt"
+fi
 SKILLS_DIR="$EINSTEIN_DIR/Skills-Salesforce"
 RULES_DIR="$EINSTEIN_DIR/Rules"
 
@@ -211,7 +228,7 @@ if TS_CONTENT=$(download_file_content "$CLINE_FORK_REPO" "$CLINE_RULES_FILE" "$C
   # The pattern is: export const a4vExpertGlobalRule = `...`
   RULE_FILE="$RULES_DIR/a4v-expert-global-rule.md"
   # Write TS content to a temp file, then extract the rule via Python
-  TS_TMPFILE=$(mktemp /tmp/a4dDefaultRules.XXXXXX.ts)
+  TS_TMPFILE=$(mktemp "${TMPDIR:-/tmp}/a4dDefaultRules.XXXXXX")
   printf '%s' "$TS_CONTENT" > "$TS_TMPFILE"
 
   python3 - "$TS_TMPFILE" "$RULE_FILE" <<'PYEOF'
