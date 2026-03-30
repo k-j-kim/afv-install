@@ -4,11 +4,12 @@
 #
 # Usage:
 #   bash generate-vsix.sh
-#   bash generate-vsix.sh --salesforcedx-vscode /path/to/local/clone
-#   bash generate-vsix.sh --einstein-gpt /path/to/local/clone
+#   bash generate-vsix.sh --local salesforcedx-vscode /path/to/local/clone
+#   bash generate-vsix.sh --local einstein-gpt-for-vscode /path/to/local/clone
 #
+# Repos are configured in repos.conf (VSIX_REPOS array).
 # By default, repos are cloned fresh into a temp directory.
-# Use --<name> flags to point at existing local clones instead.
+# Use --local to point at existing local clones instead.
 
 set -euo pipefail
 
@@ -21,30 +22,46 @@ die()  { echo -e "${RED}ERROR:${NC} $*" >&2; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 VSIX_DIR="$SCRIPT_DIR/vsix"
 
-# Repos
-SALESFORCEDX_VSCODE_REPO="forcedotcom/salesforcedx-vscode"
-EINSTEIN_GPT_REPO="forcedotcom/einstein-gpt-for-vscode"
+# Source repos.conf
+if [[ -f "$SCRIPT_DIR/repos.conf" ]]; then
+  source "$SCRIPT_DIR/repos.conf"
+fi
 
-# Local path overrides
-LOCAL_SALESFORCEDX_VSCODE=""
-LOCAL_EINSTEIN_GPT=""
+# Defaults if repos.conf not found
+if [[ ${#VSIX_REPOS[@]:-0} -eq 0 ]]; then
+  VSIX_REPOS=(
+    "forcedotcom/salesforcedx-vscode@main"
+    "forcedotcom/einstein-gpt-for-vscode@main"
+  )
+fi
+
+# Helper to split "owner/repo@branch"
+parse_repo() { echo "${1%%@*}"; }
+parse_branch() {
+  local branch="${1#*@}"
+  [[ "$branch" == "$1" ]] && echo "main" || echo "$branch"
+}
+
+# Local path overrides (keyed by repo name)
+declare -A LOCAL_PATHS
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --salesforcedx-vscode)
-      [[ -z "${2:-}" ]] && die "--salesforcedx-vscode requires a path"
-      LOCAL_SALESFORCEDX_VSCODE="$2"; shift 2 ;;
-    --einstein-gpt)
-      [[ -z "${2:-}" ]] && die "--einstein-gpt requires a path"
-      LOCAL_EINSTEIN_GPT="$2"; shift 2 ;;
+    --local)
+      [[ -z "${2:-}" || -z "${3:-}" ]] && die "--local requires REPO_NAME and PATH arguments"
+      LOCAL_PATHS["$2"]="$3"; shift 3 ;;
     -h|--help)
       echo "Usage: bash generate-vsix.sh [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --salesforcedx-vscode PATH   Use local clone of $SALESFORCEDX_VSCODE_REPO"
-      echo "  --einstein-gpt PATH          Use local clone of $EINSTEIN_GPT_REPO"
-      echo "  -h, --help                   Show this help"
+      echo "  --local REPO_NAME PATH   Use local clone for a repo (e.g. --local salesforcedx-vscode /path/to/clone)"
+      echo "  -h, --help               Show this help"
+      echo ""
+      echo "Configured VSIX repos (from repos.conf):"
+      for entry in "${VSIX_REPOS[@]}"; do
+        echo "  $(parse_repo "$entry") @ $(parse_branch "$entry")"
+      done
       exit 0 ;;
     *)
       die "Unknown argument: $1" ;;
@@ -67,7 +84,7 @@ cleanup() { for d in "${TMPDIRS[@]}"; do rm -rf "$d"; done; }
 trap cleanup EXIT
 
 prepare_repo() {
-  local repo="$1" local_path="$2"
+  local repo="$1" branch="$2" local_path="$3"
 
   if [[ -n "$local_path" ]]; then
     [[ -d "$local_path" ]] || die "Local path does not exist: $local_path"
@@ -79,8 +96,8 @@ prepare_repo() {
   tmpdir=$(mktemp -d)
   TMPDIRS+=("$tmpdir")
 
-  log "Cloning $repo..."
-  gh repo clone "$repo" "$tmpdir/repo" -- --depth 1 || {
+  log "Cloning $repo@$branch..."
+  gh repo clone "$repo" "$tmpdir/repo" -- --depth 1 --branch "$branch" || {
     warn "Could not clone $repo — skipping"
     echo ""
     return
@@ -123,64 +140,43 @@ mkdir -p "$VSIX_DIR"
 rm -f "$VSIX_DIR"/*.vsix
 log "Cleared existing vsix/ contents"
 
-# ── salesforcedx-vscode (monorepo) ───────────────────────────────────────────
-log "Preparing $SALESFORCEDX_VSCODE_REPO..."
-SDXV_DIR=$(prepare_repo "$SALESFORCEDX_VSCODE_REPO" "$LOCAL_SALESFORCEDX_VSCODE")
+# ── Build and package each VSIX repo ─────────────────────────────────────────
+for vsix_entry in "${VSIX_REPOS[@]}"; do
+  vsix_repo=$(parse_repo "$vsix_entry")
+  vsix_branch=$(parse_branch "$vsix_entry")
+  vsix_name="${vsix_repo##*/}"
+  local_path="${LOCAL_PATHS[$vsix_name]:-}"
 
-if [[ -n "$SDXV_DIR" ]]; then
-  log "Installing dependencies..."
-  if [[ -f "$SDXV_DIR/yarn.lock" ]]; then
-    (cd "$SDXV_DIR" && yarn install --frozen-lockfile) || die "yarn install failed for salesforcedx-vscode"
-  else
-    (cd "$SDXV_DIR" && npm ci) || die "npm ci failed for salesforcedx-vscode"
+  log "Preparing $vsix_repo@$vsix_branch..."
+  REPO_DIR=$(prepare_repo "$vsix_repo" "$vsix_branch" "$local_path")
+
+  if [[ -z "$REPO_DIR" ]]; then
+    continue
   fi
 
-  log "Building..."
-  if [[ -f "$SDXV_DIR/yarn.lock" ]]; then
-    (cd "$SDXV_DIR" && yarn build) || die "Build failed for salesforcedx-vscode"
+  log "Installing dependencies for $vsix_name..."
+  if [[ -f "$REPO_DIR/yarn.lock" ]]; then
+    (cd "$REPO_DIR" && yarn install --frozen-lockfile) || { warn "yarn install failed for $vsix_name — skipping"; continue; }
   else
-    (cd "$SDXV_DIR" && npm run build) || die "Build failed for salesforcedx-vscode"
+    (cd "$REPO_DIR" && npm ci) || { warn "npm ci failed for $vsix_name — skipping"; continue; }
   fi
 
-  # Package each extension in packages/
-  if [[ -d "$SDXV_DIR/packages" ]]; then
-    for ext_dir in "$SDXV_DIR"/packages/*/; do
+  log "Building $vsix_name..."
+  if [[ -f "$REPO_DIR/yarn.lock" ]]; then
+    (cd "$REPO_DIR" && yarn build) || { warn "Build failed for $vsix_name — skipping"; continue; }
+  else
+    (cd "$REPO_DIR" && npm run build) || { warn "Build failed for $vsix_name — skipping"; continue; }
+  fi
+
+  # Package each extension (monorepo with packages/ or single repo)
+  if [[ -d "$REPO_DIR/packages" ]]; then
+    for ext_dir in "$REPO_DIR"/packages/*/; do
       package_extension "$ext_dir"
     done
   else
-    # Single extension repo
-    package_extension "$SDXV_DIR"
+    package_extension "$REPO_DIR"
   fi
-fi
-
-# ── einstein-gpt-for-vscode ─────────────────────────────────────────────────
-log "Preparing $EINSTEIN_GPT_REPO..."
-EGPT_DIR=$(prepare_repo "$EINSTEIN_GPT_REPO" "$LOCAL_EINSTEIN_GPT")
-
-if [[ -n "$EGPT_DIR" ]]; then
-  log "Installing dependencies..."
-  if [[ -f "$EGPT_DIR/yarn.lock" ]]; then
-    (cd "$EGPT_DIR" && yarn install --frozen-lockfile) || die "yarn install failed for einstein-gpt"
-  else
-    (cd "$EGPT_DIR" && npm ci) || die "npm ci failed for einstein-gpt"
-  fi
-
-  log "Building..."
-  if [[ -f "$EGPT_DIR/yarn.lock" ]]; then
-    (cd "$EGPT_DIR" && yarn build) || die "Build failed for einstein-gpt"
-  else
-    (cd "$EGPT_DIR" && npm run build) || die "Build failed for einstein-gpt"
-  fi
-
-  # Package — could be monorepo or single
-  if [[ -d "$EGPT_DIR/packages" ]]; then
-    for ext_dir in "$EGPT_DIR"/packages/*/; do
-      package_extension "$ext_dir"
-    done
-  else
-    package_extension "$EGPT_DIR"
-  fi
-fi
+done
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 echo ""
