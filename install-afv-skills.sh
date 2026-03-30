@@ -101,6 +101,21 @@ if [[ "$SCRIPT_SOURCE" != "/dev/stdin" && "$SCRIPT_SOURCE" != "bash" && "$SCRIPT
 fi
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
+# Source repos.conf (local file or downloaded)
+CONF_LOADED=false
+if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/repos.conf" ]]; then
+  source "$SCRIPT_DIR/repos.conf"
+  CONF_LOADED=true
+fi
+
+# Helper to split "owner/repo@branch" into repo and branch parts
+parse_repo() { echo "${1%%@*}"; }
+parse_branch() {
+  local branch="${1#*@}"
+  [[ "$branch" == "$1" ]] && echo "main" || echo "$branch"
+}
+
 if $IS_MACOS; then
   EINSTEIN_DIR="$HOME/Library/Application Support/Code/User/globalStorage/salesforce.salesforcedx-einstein-gpt"
 else
@@ -108,22 +123,17 @@ else
 fi
 SKILLS_DIR="$EINSTEIN_DIR/Skills-Salesforce"
 RULES_DIR="$EINSTEIN_DIR/Rules"
-
-AFV_LIBRARY_REPO="forcedotcom/afv-library"
-AFV_LIBRARY_BRANCH="main"
-AFV_SKILLS_SUBDIR="skills"
-
-SF_PLUGIN_REPOS=(
-  "salesforcecli/plugin-templates"
-)
 SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 
-INSTALL_REPO="k-j-kim/afv-install"
-INSTALL_REPO_BRANCH="main"
-
-CLINE_FORK_REPO="forcedotcom/cline-fork"
-CLINE_FORK_BRANCH="agenticChat"
-CLINE_RULES_FILE="src/core/context/instructions/user-instructions/a4dDefaultRules.ts"
+# Defaults (used if repos.conf was not loaded, e.g. curl | bash before downloading)
+: "${INSTALL_REPO:="k-j-kim/afv-install@main"}"
+: "${AFV_LIBRARY_REPO:="forcedotcom/afv-library@main"}"
+: "${AFV_SKILLS_SUBDIR:="skills"}"
+: "${CLINE_FORK_REPO:="forcedotcom/cline-fork@agenticChat"}"
+: "${CLINE_RULES_FILE:="src/core/context/instructions/user-instructions/a4dDefaultRules.ts"}"
+if [[ ${#SF_PLUGIN_REPOS[@]:-0} -eq 0 ]]; then
+  SF_PLUGIN_REPOS=("salesforcecli/plugin-templates@main")
+fi
 
 # Deprecated rule file names (from a4dDefaultRules.ts) to clean up
 DEPRECATED_RULES=(
@@ -143,7 +153,7 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
 elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
   USE_GH=false
 elif [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
-  warn "No GitHub auth found — rules update from $CLINE_FORK_REPO will be skipped"
+  warn "No GitHub auth found — rules update from $(parse_repo "$CLINE_FORK_REPO") will be skipped"
 else
   die "No GitHub auth found.\n   Run: gh auth login\n   Or:  export GITHUB_TOKEN=<token>"
 fi
@@ -205,15 +215,15 @@ TMPDIR_VSIX=""
 if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/vsix" ]]; then
   VSIX_DIR="$SCRIPT_DIR/vsix"
 else
-  log "Downloading vsix/ from $INSTALL_REPO..."
-  if TMPDIR_VSIX=$(download_tarball "$INSTALL_REPO" "$INSTALL_REPO_BRANCH"); then
+  log "Downloading vsix/ from $(parse_repo "$INSTALL_REPO")..."
+  if TMPDIR_VSIX=$(download_tarball "$(parse_repo "$INSTALL_REPO")" "$(parse_branch "$INSTALL_REPO")"); then
     if [[ -d "$TMPDIR_VSIX/repo/vsix" ]]; then
       VSIX_DIR="$TMPDIR_VSIX/repo/vsix"
     else
-      warn "No vsix/ directory found in $INSTALL_REPO — skipping VSIX installation"
+      warn "No vsix/ directory found in $(parse_repo "$INSTALL_REPO") — skipping VSIX installation"
     fi
   else
-    warn "Could not download $INSTALL_REPO — skipping VSIX installation"
+    warn "Could not download $(parse_repo "$INSTALL_REPO") — skipping VSIX installation"
   fi
 fi
 
@@ -246,15 +256,15 @@ if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
     die "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $LOCAL_LIBRARY_PATH"
   fi
 else
-  step "Step 3: Installing skills from $AFV_LIBRARY_REPO..."
-  if ! TMPDIR_LIBRARY=$(download_tarball "$AFV_LIBRARY_REPO" "$AFV_LIBRARY_BRANCH"); then
-    warn "Skipping skills update — could not access $AFV_LIBRARY_REPO"
-    warn "Request access at: https://github.com/$AFV_LIBRARY_REPO"
+  step "Step 3: Installing skills from $(parse_repo "$AFV_LIBRARY_REPO")..."
+  if ! TMPDIR_LIBRARY=$(download_tarball "$(parse_repo "$AFV_LIBRARY_REPO")" "$(parse_branch "$AFV_LIBRARY_REPO")"); then
+    warn "Skipping skills update — could not access $(parse_repo "$AFV_LIBRARY_REPO")"
+    warn "Request access at: https://github.com/$(parse_repo "$AFV_LIBRARY_REPO")"
   else
     LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
     if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
       rm -rf "$TMPDIR_LIBRARY"
-      warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $AFV_LIBRARY_REPO — skipping skills update"
+      warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $(parse_repo "$AFV_LIBRARY_REPO") — skipping skills update"
       LIBRARY_SKILLS_PATH=""
     fi
   fi
@@ -285,11 +295,11 @@ if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
 fi
 
 # ── Step 4: Rules from cline-fork ─────────────────────────────────────────────
-step "Step 4: Attempting to fetch rules from $CLINE_FORK_REPO..."
+step "Step 4: Attempting to fetch rules from $(parse_repo "$CLINE_FORK_REPO")..."
 mkdir -p "$RULES_DIR"
 
 TS_CONTENT=""
-if TS_CONTENT=$(download_file_content "$CLINE_FORK_REPO" "$CLINE_RULES_FILE" "$CLINE_FORK_BRANCH" 2>/dev/null); then
+if TS_CONTENT=$(download_file_content "$(parse_repo "$CLINE_FORK_REPO")" "$CLINE_RULES_FILE" "$(parse_branch "$CLINE_FORK_REPO")" 2>/dev/null); then
   log "Downloaded $CLINE_RULES_FILE"
 
   # Extract the a4vExpertGlobalRule template literal content
@@ -344,7 +354,7 @@ PYEOF
   [[ $deprecated_removed -gt 0 ]] && log "Removed $deprecated_removed deprecated rule file(s)"
 
 else
-  warn "Could not access $CLINE_FORK_REPO (no access or repo unavailable)"
+  warn "Could not access $(parse_repo "$CLINE_FORK_REPO") (no access or repo unavailable)"
   warn "Skipping rules update — Skills installation still succeeded"
 fi
 
@@ -352,27 +362,29 @@ fi
 step "Step 5: Setting up local SF plugin repos..."
 mkdir -p "$SF_PLUGINS_DIR"
 
-for plugin_repo in "${SF_PLUGIN_REPOS[@]}"; do
+for plugin_entry in "${SF_PLUGIN_REPOS[@]}"; do
+  plugin_repo=$(parse_repo "$plugin_entry")
+  plugin_branch=$(parse_branch "$plugin_entry")
   plugin_name="${plugin_repo##*/}"
   plugin_dir="$SF_PLUGINS_DIR/$plugin_name"
 
   if [[ -d "$plugin_dir/.git" ]]; then
-    log "Updating existing clone: $plugin_name"
-    git -C "$plugin_dir" fetch origin && git -C "$plugin_dir" reset --hard origin/main || {
+    log "Updating existing clone: $plugin_name ($plugin_branch)"
+    git -C "$plugin_dir" fetch origin && git -C "$plugin_dir" checkout "$plugin_branch" && git -C "$plugin_dir" reset --hard "origin/$plugin_branch" || {
       warn "Failed to update $plugin_name — removing and re-cloning"
       rm -rf "$plugin_dir"
     }
   fi
 
   if [[ ! -d "$plugin_dir" ]]; then
-    log "Cloning $plugin_repo..."
+    log "Cloning $plugin_repo@$plugin_branch..."
     if [[ "$USE_GH" == "true" ]]; then
-      gh repo clone "$plugin_repo" "$plugin_dir" -- --depth 1 || {
+      gh repo clone "$plugin_repo" "$plugin_dir" -- --depth 1 --branch "$plugin_branch" || {
         warn "Could not clone $plugin_repo — skipping"
         continue
       }
     else
-      git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${plugin_repo}.git" "$plugin_dir" || {
+      git clone --depth 1 --branch "$plugin_branch" "https://x-access-token:${GITHUB_TOKEN}@github.com/${plugin_repo}.git" "$plugin_dir" || {
         warn "Could not clone $plugin_repo — skipping"
         continue
       }
