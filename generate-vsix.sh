@@ -28,7 +28,7 @@ if [[ -f "$SCRIPT_DIR/repos.conf" ]]; then
 fi
 
 # Defaults if repos.conf not found
-if [[ ${#VSIX_REPOS[@]:-0} -eq 0 ]]; then
+if ! declare -p VSIX_REPOS &>/dev/null; then
   VSIX_REPOS=(
     "forcedotcom/salesforcedx-vscode@main"
     "forcedotcom/einstein-gpt-for-vscode@main"
