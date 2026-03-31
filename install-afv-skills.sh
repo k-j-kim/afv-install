@@ -30,15 +30,33 @@ esac
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 LOCAL_LIBRARY_PATH=""
+RUN_VSIX=true
+RUN_SKILLS=true
+RUN_RULES=true
+RUN_PLUGINS=true
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local)
       [[ -z "${2:-}" ]] && die "--local requires a path argument"
       LOCAL_LIBRARY_PATH="$2"
-      shift 2
-      ;;
+      shift 2 ;;
+    --no-vsix)    RUN_VSIX=false;    shift ;;
+    --no-skills)  RUN_SKILLS=false;  shift ;;
+    --no-rules)   RUN_RULES=false;   shift ;;
+    --no-plugins) RUN_PLUGINS=false; shift ;;
+    -h|--help)
+      echo "Usage: bash install-afv-skills.sh [OPTIONS]"
+      echo ""
+      echo "Options:"
+      echo "  --local PATH     Use local clone of afv-library"
+      echo "  --no-vsix        Skip VSIX extension installation"
+      echo "  --no-skills      Skip AFV skills installation"
+      echo "  --no-rules       Skip rules update from cline-fork"
+      echo "  --no-plugins     Skip SF CLI plugin linking"
+      echo "  -h, --help       Show this help"
+      exit 0 ;;
     *)
-      die "Unknown argument: $1\nUsage: bash install-afv-skills.sh [--local /path/to/afv-library]"
+      die "Unknown argument: $1\nUsage: bash install-afv-skills.sh [--help]"
       ;;
   esac
 done
@@ -209,110 +227,119 @@ download_file_content() {
 }
 
 # ── Step 1: Install VSIX extensions ──────────────────────────────────────────
-step "Step 1: Installing VS Code extensions from vsix/..."
+if $RUN_VSIX; then
+  step "Step 1: Installing VS Code extensions from vsix/..."
 
-VSIX_DIR=""
-TMPDIR_VSIX=""
+  VSIX_DIR=""
+  TMPDIR_VSIX=""
 
-# Try local vsix/ first (running from a clone), otherwise download from repo
-if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/vsix" ]]; then
-  VSIX_DIR="$SCRIPT_DIR/vsix"
-else
-  log "Downloading vsix/ from $(parse_repo "$INSTALL_REPO")..."
-  if TMPDIR_VSIX=$(download_tarball "$(parse_repo "$INSTALL_REPO")" "$(parse_branch "$INSTALL_REPO")"); then
-    if [[ -d "$TMPDIR_VSIX/repo/vsix" ]]; then
-      VSIX_DIR="$TMPDIR_VSIX/repo/vsix"
-    else
-      warn "No vsix/ directory found in $(parse_repo "$INSTALL_REPO") — skipping VSIX installation"
-    fi
+  # Try local vsix/ first (running from a clone), otherwise download from repo
+  if [[ -n "$SCRIPT_DIR" && -d "$SCRIPT_DIR/vsix" ]]; then
+    VSIX_DIR="$SCRIPT_DIR/vsix"
   else
-    warn "Could not download $(parse_repo "$INSTALL_REPO") — skipping VSIX installation"
+    log "Downloading vsix/ from $(parse_repo "$INSTALL_REPO")..."
+    if TMPDIR_VSIX=$(download_tarball "$(parse_repo "$INSTALL_REPO")" "$(parse_branch "$INSTALL_REPO")"); then
+      if [[ -d "$TMPDIR_VSIX/repo/vsix" ]]; then
+        VSIX_DIR="$TMPDIR_VSIX/repo/vsix"
+      else
+        warn "No vsix/ directory found in $(parse_repo "$INSTALL_REPO") — skipping VSIX installation"
+      fi
+    else
+      warn "Could not download $(parse_repo "$INSTALL_REPO") — skipping VSIX installation"
+    fi
   fi
-fi
 
-if [[ -n "$VSIX_DIR" ]]; then
-  vsix_count=0
-  for vsix_file in "$VSIX_DIR"/*.vsix; do
-    [[ -f "$vsix_file" ]] || continue
-    vsix_name=$(basename "$vsix_file")
-    log "Installing $vsix_name..."
-    code --install-extension "$vsix_file" --force || { warn "Failed to install $vsix_name"; continue; }
-    info "Installed: $vsix_name"
-    ((vsix_count++))
-  done
-  log "Installed $vsix_count VSIX extension(s)"
-fi
+  if [[ -n "$VSIX_DIR" ]]; then
+    vsix_count=0
+    for vsix_file in "$VSIX_DIR"/*.vsix; do
+      [[ -f "$vsix_file" ]] || continue
+      vsix_name=$(basename "$vsix_file")
+      log "Installing $vsix_name..."
+      code --install-extension "$vsix_file" --force || { warn "Failed to install $vsix_name"; continue; }
+      info "Installed: $vsix_name"
+      ((vsix_count++))
+    done
+    log "Installed $vsix_count VSIX extension(s)"
+  fi
 
-[[ -n "$TMPDIR_VSIX" ]] && rm -rf "$TMPDIR_VSIX"
+  [[ -n "${TMPDIR_VSIX:-}" ]] && rm -rf "$TMPDIR_VSIX"
+else
+  step "Step 1: Skipping VSIX installation (--no-vsix)"
+fi
 
 # ── Steps 2 & 3: Remove old + install fresh AFV skills ───────────────────────
-step "Step 2: Removing existing AFV skills from Skills-Salesforce/..."
-mkdir -p "$SKILLS_DIR"
+if $RUN_SKILLS; then
+  step "Step 2: Removing existing AFV skills from Skills-Salesforce/..."
+  mkdir -p "$SKILLS_DIR"
 
-LIBRARY_SKILLS_PATH=""
-TMPDIR_LIBRARY=""
+  LIBRARY_SKILLS_PATH=""
+  TMPDIR_LIBRARY=""
 
-if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
-  step "Step 3: Installing skills from local path: $LOCAL_LIBRARY_PATH..."
-  LIBRARY_SKILLS_PATH="$LOCAL_LIBRARY_PATH/$AFV_SKILLS_SUBDIR"
-  if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
-    die "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $LOCAL_LIBRARY_PATH"
-  fi
-else
-  step "Step 3: Installing skills from $(parse_repo "$AFV_LIBRARY_REPO")..."
-  if ! TMPDIR_LIBRARY=$(download_tarball "$(parse_repo "$AFV_LIBRARY_REPO")" "$(parse_branch "$AFV_LIBRARY_REPO")"); then
-    warn "Skipping skills update — could not access $(parse_repo "$AFV_LIBRARY_REPO")"
-    warn "Request access at: https://github.com/$(parse_repo "$AFV_LIBRARY_REPO")"
-  else
-    LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
+  if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
+    step "Step 3: Installing skills from local path: $LOCAL_LIBRARY_PATH..."
+    LIBRARY_SKILLS_PATH="$LOCAL_LIBRARY_PATH/$AFV_SKILLS_SUBDIR"
     if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
-      rm -rf "$TMPDIR_LIBRARY"
-      warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $(parse_repo "$AFV_LIBRARY_REPO") — skipping skills update"
-      LIBRARY_SKILLS_PATH=""
+      die "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $LOCAL_LIBRARY_PATH"
+    fi
+  else
+    step "Step 3: Installing skills from $(parse_repo "$AFV_LIBRARY_REPO")..."
+    if ! TMPDIR_LIBRARY=$(download_tarball "$(parse_repo "$AFV_LIBRARY_REPO")" "$(parse_branch "$AFV_LIBRARY_REPO")"); then
+      warn "Skipping skills update — could not access $(parse_repo "$AFV_LIBRARY_REPO")"
+      warn "Request access at: https://github.com/$(parse_repo "$AFV_LIBRARY_REPO")"
+    else
+      LIBRARY_SKILLS_PATH="$TMPDIR_LIBRARY/repo/$AFV_SKILLS_SUBDIR"
+      if [[ ! -d "$LIBRARY_SKILLS_PATH" ]]; then
+        rm -rf "$TMPDIR_LIBRARY"
+        warn "Expected '$AFV_SKILLS_SUBDIR/' directory not found in $(parse_repo "$AFV_LIBRARY_REPO") — skipping skills update"
+        LIBRARY_SKILLS_PATH=""
+      fi
     fi
   fi
-fi
 
-if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
-  # Step 2: remove all existing skills in the directory
-  removed_count=0
-  while IFS= read -r -d '' skill_dir; do
-    skill_name=$(basename "$skill_dir")
-    rm -rf "$skill_dir"
-    info "Removed: $skill_name"
-    ((removed_count++))
-  done < <(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
-  [[ $removed_count -eq 0 ]] && info "No existing skills to remove" || log "Removed $removed_count skill(s)"
+  if [[ -n "$LIBRARY_SKILLS_PATH" ]]; then
+    # Step 2: remove all existing skills in the directory
+    removed_count=0
+    while IFS= read -r -d '' skill_dir; do
+      skill_name=$(basename "$skill_dir")
+      rm -rf "$skill_dir"
+      info "Removed: $skill_name"
+      ((removed_count++))
+    done < <(find "$SKILLS_DIR" -mindepth 1 -maxdepth 1 -type d -print0)
+    [[ $removed_count -eq 0 ]] && info "No existing skills to remove" || log "Removed $removed_count skill(s)"
 
-  # Step 3: install fresh copies
-  copied_count=0
-  while IFS= read -r -d '' skill_dir; do
-    skill_name=$(basename "$skill_dir")
-    cp -r "$skill_dir" "$SKILLS_DIR/$skill_name"
-    info "Installed: $skill_name"
-    ((copied_count++))
-  done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
+    # Step 3: install fresh copies
+    copied_count=0
+    while IFS= read -r -d '' skill_dir; do
+      skill_name=$(basename "$skill_dir")
+      cp -r "$skill_dir" "$SKILLS_DIR/$skill_name"
+      info "Installed: $skill_name"
+      ((copied_count++))
+    done < <(find "$LIBRARY_SKILLS_PATH" -mindepth 1 -maxdepth 1 -type d -print0)
 
-  [[ -n "$TMPDIR_LIBRARY" ]] && rm -rf "$TMPDIR_LIBRARY"
-  log "Installed $copied_count skill(s) to: $SKILLS_DIR"
+    [[ -n "${TMPDIR_LIBRARY:-}" ]] && rm -rf "$TMPDIR_LIBRARY"
+    log "Installed $copied_count skill(s) to: $SKILLS_DIR"
+  fi
+else
+  step "Steps 2-3: Skipping skills installation (--no-skills)"
 fi
 
 # ── Step 4: Rules from cline-fork ─────────────────────────────────────────────
-step "Step 4: Attempting to fetch rules from $(parse_repo "$CLINE_FORK_REPO")..."
-mkdir -p "$RULES_DIR"
+if $RUN_RULES; then
+  step "Step 4: Attempting to fetch rules from $(parse_repo "$CLINE_FORK_REPO")..."
+  mkdir -p "$RULES_DIR"
 
-TS_CONTENT=""
-if TS_CONTENT=$(download_file_content "$(parse_repo "$CLINE_FORK_REPO")" "$CLINE_RULES_FILE" "$(parse_branch "$CLINE_FORK_REPO")" 2>/dev/null); then
-  log "Downloaded $CLINE_RULES_FILE"
+  TS_CONTENT=""
+  if TS_CONTENT=$(download_file_content "$(parse_repo "$CLINE_FORK_REPO")" "$CLINE_RULES_FILE" "$(parse_branch "$CLINE_FORK_REPO")" 2>/dev/null); then
+    log "Downloaded $CLINE_RULES_FILE"
 
-  # Extract the a4vExpertGlobalRule template literal content
-  # The pattern is: export const a4vExpertGlobalRule = `...`
-  RULE_FILE="$RULES_DIR/a4v-expert-global-rule.md"
-  # Write TS content to a temp file, then extract the rule via Python
-  TS_TMPFILE=$(mktemp "${TMPDIR:-/tmp}/a4dDefaultRules.XXXXXX")
-  printf '%s' "$TS_CONTENT" > "$TS_TMPFILE"
+    # Extract the a4vExpertGlobalRule template literal content
+    # The pattern is: export const a4vExpertGlobalRule = `...`
+    RULE_FILE="$RULES_DIR/a4v-expert-global-rule.md"
+    # Write TS content to a temp file, then extract the rule via Python
+    TS_TMPFILE=$(mktemp "${TMPDIR:-/tmp}/a4dDefaultRules.XXXXXX")
+    printf '%s' "$TS_CONTENT" > "$TS_TMPFILE"
 
-  python3 - "$TS_TMPFILE" "$RULE_FILE" <<'PYEOF'
+    python3 - "$TS_TMPFILE" "$RULE_FILE" <<'PYEOF'
 import sys, re
 
 ts_file, rule_file = sys.argv[1], sys.argv[2]
@@ -341,77 +368,84 @@ else:
     print("  · WARNING: Could not extract a4vExpertGlobalRule — pattern not matched", file=sys.stderr)
     sys.exit(1)
 PYEOF
-  rm -f "$TS_TMPFILE"
-  info "Updated: a4v-expert-global-rule.md"
+    rm -f "$TS_TMPFILE"
+    info "Updated: a4v-expert-global-rule.md"
 
-  # Remove deprecated rule files
-  deprecated_removed=0
-  for deprecated in "${DEPRECATED_RULES[@]}"; do
-    target="$RULES_DIR/$deprecated"
-    if [[ -f "$target" ]]; then
-      rm -f "$target"
-      info "Removed deprecated rule: $deprecated"
-      ((deprecated_removed++))
-    fi
-  done
-  [[ $deprecated_removed -gt 0 ]] && log "Removed $deprecated_removed deprecated rule file(s)"
+    # Remove deprecated rule files
+    deprecated_removed=0
+    for deprecated in "${DEPRECATED_RULES[@]}"; do
+      target="$RULES_DIR/$deprecated"
+      if [[ -f "$target" ]]; then
+        rm -f "$target"
+        info "Removed deprecated rule: $deprecated"
+        ((deprecated_removed++))
+      fi
+    done
+    [[ $deprecated_removed -gt 0 ]] && log "Removed $deprecated_removed deprecated rule file(s)"
 
+  else
+    warn "Could not access $(parse_repo "$CLINE_FORK_REPO") (no access or repo unavailable)"
+    warn "Skipping rules update — Skills installation still succeeded"
+  fi
 else
-  warn "Could not access $(parse_repo "$CLINE_FORK_REPO") (no access or repo unavailable)"
-  warn "Skipping rules update — Skills installation still succeeded"
+  step "Step 4: Skipping rules update (--no-rules)"
 fi
 
 # ── Step 5: Clone, build, and link SF plugin repos ─────────────────────────
-step "Step 5: Setting up local SF plugin repos..."
-mkdir -p "$SF_PLUGINS_DIR"
+if $RUN_PLUGINS; then
+  step "Step 5: Setting up local SF plugin repos..."
+  mkdir -p "$SF_PLUGINS_DIR"
 
-for plugin_entry in "${SF_PLUGIN_REPOS[@]}"; do
-  plugin_repo=$(parse_repo "$plugin_entry")
-  plugin_branch=$(parse_branch "$plugin_entry")
-  plugin_name="${plugin_repo##*/}"
-  plugin_dir="$SF_PLUGINS_DIR/$plugin_name"
+  for plugin_entry in "${SF_PLUGIN_REPOS[@]}"; do
+    plugin_repo=$(parse_repo "$plugin_entry")
+    plugin_branch=$(parse_branch "$plugin_entry")
+    plugin_name="${plugin_repo##*/}"
+    plugin_dir="$SF_PLUGINS_DIR/$plugin_name"
 
-  if [[ -d "$plugin_dir/.git" ]]; then
-    log "Updating existing clone: $plugin_name ($plugin_branch)"
-    git -C "$plugin_dir" fetch origin && git -C "$plugin_dir" checkout "$plugin_branch" && git -C "$plugin_dir" reset --hard "origin/$plugin_branch" || {
-      warn "Failed to update $plugin_name — removing and re-cloning"
-      rm -rf "$plugin_dir"
-    }
-  fi
-
-  if [[ ! -d "$plugin_dir" ]]; then
-    log "Cloning $plugin_repo@$plugin_branch..."
-    if [[ "$USE_GH" == "true" ]]; then
-      gh repo clone "$plugin_repo" "$plugin_dir" -- --depth 1 --branch "$plugin_branch" || {
-        warn "Could not clone $plugin_repo — skipping"
-        continue
-      }
-    else
-      git clone --depth 1 --branch "$plugin_branch" "https://x-access-token:${GITHUB_TOKEN}@github.com/${plugin_repo}.git" "$plugin_dir" || {
-        warn "Could not clone $plugin_repo — skipping"
-        continue
+    if [[ -d "$plugin_dir/.git" ]]; then
+      log "Updating existing clone: $plugin_name ($plugin_branch)"
+      git -C "$plugin_dir" fetch origin && git -C "$plugin_dir" checkout "$plugin_branch" && git -C "$plugin_dir" reset --hard "origin/$plugin_branch" || {
+        warn "Failed to update $plugin_name — removing and re-cloning"
+        rm -rf "$plugin_dir"
       }
     fi
-  fi
 
-  log "Installing dependencies for $plugin_name..."
-  if [[ -f "$plugin_dir/yarn.lock" ]]; then
-    (cd "$plugin_dir" && yarn install --frozen-lockfile) || { warn "yarn install failed for $plugin_name — skipping"; continue; }
-  else
-    (cd "$plugin_dir" && npm ci) || { warn "npm ci failed for $plugin_name — skipping"; continue; }
-  fi
+    if [[ ! -d "$plugin_dir" ]]; then
+      log "Cloning $plugin_repo@$plugin_branch..."
+      if [[ "$USE_GH" == "true" ]]; then
+        gh repo clone "$plugin_repo" "$plugin_dir" -- --depth 1 --branch "$plugin_branch" || {
+          warn "Could not clone $plugin_repo — skipping"
+          continue
+        }
+      else
+        git clone --depth 1 --branch "$plugin_branch" "https://x-access-token:${GITHUB_TOKEN}@github.com/${plugin_repo}.git" "$plugin_dir" || {
+          warn "Could not clone $plugin_repo — skipping"
+          continue
+        }
+      fi
+    fi
 
-  log "Building $plugin_name..."
-  if [[ -f "$plugin_dir/yarn.lock" ]]; then
-    (cd "$plugin_dir" && yarn build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
-  else
-    (cd "$plugin_dir" && npm run build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
-  fi
+    log "Installing dependencies for $plugin_name..."
+    if [[ -f "$plugin_dir/yarn.lock" ]]; then
+      (cd "$plugin_dir" && yarn install --frozen-lockfile) || { warn "yarn install failed for $plugin_name — skipping"; continue; }
+    else
+      (cd "$plugin_dir" && npm ci) || { warn "npm ci failed for $plugin_name — skipping"; continue; }
+    fi
 
-  log "Linking $plugin_name to sf CLI..."
-  sf plugins link "$plugin_dir" || { warn "Failed to link $plugin_name"; continue; }
-  info "Linked: $plugin_name"
-done
+    log "Building $plugin_name..."
+    if [[ -f "$plugin_dir/yarn.lock" ]]; then
+      (cd "$plugin_dir" && yarn build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
+    else
+      (cd "$plugin_dir" && npm run build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
+    fi
+
+    log "Linking $plugin_name to sf CLI..."
+    sf plugins link "$plugin_dir" || { warn "Failed to link $plugin_name"; continue; }
+    info "Linked: $plugin_name"
+  done
+else
+  step "Step 5: Skipping SF plugin linking (--no-plugins)"
+fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
