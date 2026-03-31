@@ -5,10 +5,9 @@
 # Usage:
 #   bash generate-vsix.sh
 #   bash generate-vsix.sh --local salesforcedx-vscode /path/to/local/clone
-#   bash generate-vsix.sh --local einstein-gpt-for-vscode /path/to/local/clone
 #
-# Repos are configured in repos.conf (VSIX_REPOS array).
-# By default, repos are cloned fresh into a temp directory.
+# Repos are configured in repos.conf (VSIX_REPOS and VSIX_DEPS arrays).
+# By default, repos are cloned fresh into a shared temp workspace.
 # Use --local to point at existing local clones instead.
 
 set -euo pipefail
@@ -31,7 +30,12 @@ fi
 if [[ ${#VSIX_REPOS[@]:-0} -eq 0 ]]; then
   VSIX_REPOS=(
     "forcedotcom/salesforcedx-vscode@main"
-    "forcedotcom/einstein-gpt-for-vscode@main"
+    "forcedotcom/salesforcedx-vscode-einstein-gpt@main"
+  )
+fi
+if [[ ${#VSIX_DEPS[@]:-0} -eq 0 ]]; then
+  VSIX_DEPS=(
+    "forcedotcom/cline-fork@agenticChat"
   )
 fi
 
@@ -42,15 +46,15 @@ parse_branch() {
   [[ "$branch" == "$1" ]] && echo "main" || echo "$branch"
 }
 
-# Local path overrides (keyed by repo name)
-declare -A LOCAL_PATHS
+# Local path overrides stored as "name=path" entries
+LOCAL_PATHS=()
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local)
       [[ -z "${2:-}" || -z "${3:-}" ]] && die "--local requires REPO_NAME and PATH arguments"
-      LOCAL_PATHS["$2"]="$3"; shift 3 ;;
+      LOCAL_PATHS+=("$2=$3"); shift 3 ;;
     -h|--help)
       echo "Usage: bash generate-vsix.sh [OPTIONS]"
       echo ""
@@ -60,6 +64,11 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Configured VSIX repos (from repos.conf):"
       for entry in "${VSIX_REPOS[@]}"; do
+        echo "  $(parse_repo "$entry") @ $(parse_branch "$entry")"
+      done
+      echo ""
+      echo "Dependency repos:"
+      for entry in "${VSIX_DEPS[@]}"; do
         echo "  $(parse_repo "$entry") @ $(parse_branch "$entry")"
       done
       exit 0 ;;
@@ -78,60 +87,70 @@ if ! command -v vsce &>/dev/null; then
   npm install -g @vscode/vsce
 fi
 
-# ── Helper: clone or reuse a repo ────────────────────────────────────────────
-TMPDIRS=()
-cleanup() { for d in "${TMPDIRS[@]}"; do rm -rf "$d"; done; }
+# ── Shared workspace ─────────────────────────────────────────────────────────
+# All repos (deps + vsix) are cloned as siblings in a single workspace dir
+# so they can reference each other via relative paths.
+WORKSPACE=$(mktemp -d)
+cleanup() { rm -rf "$WORKSPACE"; }
 trap cleanup EXIT
 
-prepare_repo() {
-  local repo="$1" branch="$2" local_path="$3"
+log "Workspace: $WORKSPACE"
+
+# Look up a local path override by repo name
+get_local_path() {
+  local name="$1"
+  for _lp in "${LOCAL_PATHS[@]+"${LOCAL_PATHS[@]}"}"; do
+    if [[ "${_lp%%=*}" == "$name" ]]; then
+      echo "${_lp#*=}"; return
+    fi
+  done
+  echo ""
+}
+
+# Clone a repo into the workspace (or symlink a local path)
+clone_to_workspace() {
+  local entry="$1"
+  local repo=$(parse_repo "$entry")
+  local branch=$(parse_branch "$entry")
+  local name="${repo##*/}"
+  local local_path
+  local_path=$(get_local_path "$name")
 
   if [[ -n "$local_path" ]]; then
     [[ -d "$local_path" ]] || die "Local path does not exist: $local_path"
-    echo "$local_path"
-    return
+    ln -sf "$local_path" "$WORKSPACE/$name"
+    info "Using local: $name -> $local_path"
+  else
+    log "Cloning $repo@$branch..."
+    gh repo clone "$repo" "$WORKSPACE/$name" -- --depth 1 --branch "$branch" || {
+      warn "Could not clone $repo — skipping"
+      return 1
+    }
   fi
-
-  local tmpdir
-  tmpdir=$(mktemp -d)
-  TMPDIRS+=("$tmpdir")
-
-  log "Cloning $repo@$branch..."
-  gh repo clone "$repo" "$tmpdir/repo" -- --depth 1 --branch "$branch" || {
-    warn "Could not clone $repo — skipping"
-    echo ""
-    return
-  }
-  echo "$tmpdir/repo"
+  return 0
 }
 
-# ── Helper: package a single extension directory ─────────────────────────────
-package_extension() {
-  local ext_dir="$1"
-  local ext_name
-  ext_name=$(basename "$ext_dir")
+# Install npm/yarn dependencies for a repo in the workspace
+install_deps() {
+  local name="$1"
+  local dir="$WORKSPACE/$name"
+  [[ -d "$dir" ]] || return 1
 
-  if [[ ! -f "$ext_dir/package.json" ]]; then
-    return
+  log "Installing dependencies for $name..."
+  if [[ -f "$dir/yarn.lock" ]]; then
+    (cd "$dir" && yarn install --frozen-lockfile) || { warn "yarn install failed for $name"; return 1; }
+  else
+    (cd "$dir" && npm ci) || (cd "$dir" && npm install) || { warn "npm install failed for $name"; return 1; }
   fi
-
-  # Skip if not a VS Code extension (no contributes or engines.vscode)
-  if ! python3 -c "
-import json, sys
-p = json.load(open('$ext_dir/package.json'))
-if 'vscode' not in p.get('engines', {}):
-    sys.exit(1)
-" 2>/dev/null; then
-    return
-  fi
-
-  log "Packaging $ext_name..."
-  (cd "$ext_dir" && vsce package --no-dependencies -o "$VSIX_DIR/") || {
-    warn "Failed to package $ext_name"
-    return
-  }
-  info "Packaged: $ext_name"
 }
+
+# ── Clone dependency repos ───────────────────────────────────────────────────
+for dep_entry in "${VSIX_DEPS[@]}"; do
+  dep_repo=$(parse_repo "$dep_entry")
+  dep_name="${dep_repo##*/}"
+  clone_to_workspace "$dep_entry" || continue
+  install_deps "$dep_name" || warn "Dependency $dep_name install failed — builds may fail"
+done
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 mkdir -p "$VSIX_DIR"
@@ -145,36 +164,45 @@ for vsix_entry in "${VSIX_REPOS[@]}"; do
   vsix_repo=$(parse_repo "$vsix_entry")
   vsix_branch=$(parse_branch "$vsix_entry")
   vsix_name="${vsix_repo##*/}"
-  local_path="${LOCAL_PATHS[$vsix_name]:-}"
 
-  log "Preparing $vsix_repo@$vsix_branch..."
-  REPO_DIR=$(prepare_repo "$vsix_repo" "$vsix_branch" "$local_path")
+  clone_to_workspace "$vsix_entry" || continue
+  install_deps "$vsix_name" || continue
 
-  if [[ -z "$REPO_DIR" ]]; then
-    continue
+  REPO_DIR="$WORKSPACE/$vsix_name"
+
+  # Check if repo has a native vscode:package script
+  has_vscode_package=false
+  if python3 -c "import json; p=json.load(open('$REPO_DIR/package.json')); exit(0 if 'vscode:package' in p.get('scripts',{}) else 1)" 2>/dev/null; then
+    has_vscode_package=true
   fi
 
-  log "Installing dependencies for $vsix_name..."
-  if [[ -f "$REPO_DIR/yarn.lock" ]]; then
-    (cd "$REPO_DIR" && yarn install --frozen-lockfile) || { warn "yarn install failed for $vsix_name — skipping"; continue; }
-  else
-    (cd "$REPO_DIR" && npm ci) || { warn "npm ci failed for $vsix_name — skipping"; continue; }
-  fi
+  if $has_vscode_package; then
+    log "Building and packaging $vsix_name (using vscode:package)..."
+    (cd "$REPO_DIR" && npm run compile && npm run vscode:package) || { warn "vscode:package failed for $vsix_name — skipping"; continue; }
 
-  log "Building $vsix_name..."
-  if [[ -f "$REPO_DIR/yarn.lock" ]]; then
-    (cd "$REPO_DIR" && yarn build) || { warn "Build failed for $vsix_name — skipping"; continue; }
-  else
-    (cd "$REPO_DIR" && npm run build) || { warn "Build failed for $vsix_name — skipping"; continue; }
-  fi
-
-  # Package each extension (monorepo with packages/ or single repo)
-  if [[ -d "$REPO_DIR/packages" ]]; then
-    for ext_dir in "$REPO_DIR"/packages/*/; do
-      package_extension "$ext_dir"
+    # Collect generated vsix files
+    find "$REPO_DIR" -name '*.vsix' -print0 | while IFS= read -r -d '' vsix_file; do
+      cp "$vsix_file" "$VSIX_DIR/"
+      info "Collected: $(basename "$vsix_file")"
     done
   else
-    package_extension "$REPO_DIR"
+    log "Building $vsix_name..."
+    (cd "$REPO_DIR" && npm run build) || { warn "Build failed for $vsix_name — skipping"; continue; }
+
+    log "Packaging $vsix_name..."
+    (cd "$REPO_DIR" && npx vsce package --no-dependencies -o "$VSIX_DIR/") || { warn "Packaging failed for $vsix_name — skipping"; continue; }
+
+    # Collect generated vsix files (monorepo with packages/)
+    if [[ -d "$REPO_DIR/packages" ]]; then
+      for ext_dir in "$REPO_DIR"/packages/*/; do
+        [[ -f "$ext_dir/package.json" ]] || continue
+        python3 -c "import json; p=json.load(open('$ext_dir/package.json')); exit(0 if 'vscode' in p.get('engines',{}) else 1)" 2>/dev/null || continue
+        ext_name=$(basename "$ext_dir")
+        log "Packaging $ext_name..."
+        (cd "$ext_dir" && npx vsce package --no-dependencies -o "$VSIX_DIR/") || { warn "Failed to package $ext_name"; continue; }
+        info "Packaged: $ext_name"
+      done
+    fi
   fi
 done
 
