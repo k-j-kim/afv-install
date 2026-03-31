@@ -134,7 +134,7 @@ SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 if ! declare -p SF_PLUGIN_REPOS &>/dev/null; then
   SF_PLUGIN_REPOS=(
     "salesforcecli/plugin-templates@main"
-    "forcedotcom/source-deploy-retrieve@main"
+    "salesforcecli/plugin-deploy-retrieve@main"
   )
 fi
 
