@@ -476,15 +476,11 @@ if $RUN_PLUGINS; then
     if [[ -f "$plugin_dir/yarn.lock" ]]; then
       (cd "$plugin_dir" && yarn install --frozen-lockfile) || { warn "yarn install failed for $plugin_name — skipping"; continue; }
     else
-      (cd "$plugin_dir" && npm ci) || { warn "npm ci failed for $plugin_name — skipping"; continue; }
+      (cd "$plugin_dir" && npm install) || { warn "npm install failed for $plugin_name — skipping"; continue; }
     fi
 
     log "Building $plugin_name..."
-    if [[ -f "$plugin_dir/yarn.lock" ]]; then
-      (cd "$plugin_dir" && yarn build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
-    else
-      (cd "$plugin_dir" && npm run build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
-    fi
+    (cd "$plugin_dir" && PATH="$plugin_dir/node_modules/.bin:$PATH" npm run build) || { warn "Build failed for $plugin_name — skipping link"; continue; }
 
     log "Linking $plugin_name to sf CLI..."
     sf plugins link "$plugin_dir" || { warn "Failed to link $plugin_name"; continue; }
