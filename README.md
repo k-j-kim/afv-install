@@ -58,3 +58,50 @@ curl -fsSL https://raw.githubusercontent.com/k-j-kim/afv-install/main/install-af
 ```
 
 This skips the GitHub download for skills and copies from the local `skills/` subdirectory instead. The rules update from `cline-fork` still runs if GitHub auth is available.
+
+## Generating VSIX files
+
+The `vsix/` directory contains pre-built VS Code extension files. To regenerate them from source:
+
+```bash
+bash generate-vsix.sh
+```
+
+Use `--local` to point at existing local clones instead of cloning fresh:
+
+```bash
+bash generate-vsix.sh --local salesforcedx-vscode /path/to/clone
+```
+
+### Downloading VSIX from CI
+
+You can also grab the latest VSIX artifacts directly from GitHub Actions. The CI workflows build on every commit except `main`, so you need to pick the specific run for the branch/commit you want:
+
+1. Go to the workflow page for the repo you need:
+   - [salesforcedx-vscode — testCommitExceptMain](https://github.com/forcedotcom/salesforcedx-vscode/actions/workflows/testCommitExceptMain.yml)
+   - [salesforcedx-vscode-einstein-gpt — testCommitExceptMain](https://github.com/forcedotcom/salesforcedx-vscode-einstein-gpt/actions/workflows/testCommitExceptMain.yml)
+2. Filter by the branch you want and find a successful (green) run
+3. Click the run, scroll to **Artifacts**, and download the `.vsix` files
+4. Place them in the `vsix/` directory
+
+Alternatively, use the `gh` CLI to download artifacts from a specific run:
+
+```bash
+# List recent successful runs for a repo
+gh run list --repo forcedotcom/salesforcedx-vscode --workflow testCommitExceptMain.yml --status success
+
+# Download artifacts from a specific run ID
+gh run download <RUN_ID> --repo forcedotcom/salesforcedx-vscode --dir vsix/
+```
+
+## Configuration
+
+All repo references are in `repos.conf`. Edit this file to change branches or add repos:
+
+```bash
+# Format: "owner/repo@branch"
+VSIX_REPOS=(
+  "forcedotcom/salesforcedx-vscode@main"
+  "forcedotcom/salesforcedx-vscode-einstein-gpt@main"
+)
+```
