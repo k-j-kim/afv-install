@@ -34,6 +34,7 @@ RUN_VSIX=true
 RUN_SKILLS=true
 RUN_RULES=true
 RUN_PLUGINS=true
+INTERACTIVE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local)
@@ -44,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --no-skills)  RUN_SKILLS=false;  shift ;;
     --no-rules)   RUN_RULES=false;   shift ;;
     --no-plugins) RUN_PLUGINS=false; shift ;;
+    -i|--interactive) INTERACTIVE=true; shift ;;
     -h|--help)
       echo "Usage: bash install-afv-skills.sh [OPTIONS]"
       echo ""
@@ -53,6 +55,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-skills      Skip AFV skills installation"
       echo "  --no-rules       Skip rules update from cline-fork"
       echo "  --no-plugins     Skip SF CLI plugin linking"
+      echo "  -i, --interactive  Interactively select which steps to run"
       echo "  -h, --help       Show this help"
       exit 0 ;;
     *)
@@ -60,6 +63,50 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# ── Interactive step selection ───────────────────────────────────────────────
+if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
+  # Read from /dev/tty so it works even when piped via curl | bash
+  echo ""
+  echo -e "${GREEN}Select steps to run${NC} (toggle with number, Enter to confirm):"
+  echo ""
+
+  STEPS=("Install VSIX extensions" "Install AFV skills" "Update rules from cline-fork" "Clone/build/link SF plugins")
+  STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_RULES RUN_PLUGINS)
+
+  print_menu() {
+    for i in "${!STEPS[@]}"; do
+      local var="${STEP_VARS[$i]}"
+      local state="${!var}"
+      if $state; then
+        echo -e "  ${GREEN}[x]${NC} $((i+1)). ${STEPS[$i]}"
+      else
+        echo -e "  ${YELLOW}[ ]${NC} $((i+1)). ${STEPS[$i]}"
+      fi
+    done
+    echo ""
+    echo -e "  ${BLUE}Toggle: 1-4${NC}  |  ${BLUE}a: all on${NC}  |  ${BLUE}n: all off${NC}  |  ${GREEN}Enter: confirm${NC}"
+  }
+
+  while true; do
+    print_menu
+    echo -n "> "
+    read -r choice </dev/tty
+    case "$choice" in
+      1) $RUN_VSIX    && RUN_VSIX=false    || RUN_VSIX=true ;;
+      2) $RUN_SKILLS   && RUN_SKILLS=false  || RUN_SKILLS=true ;;
+      3) $RUN_RULES    && RUN_RULES=false   || RUN_RULES=true ;;
+      4) $RUN_PLUGINS  && RUN_PLUGINS=false || RUN_PLUGINS=true ;;
+      a|A) RUN_VSIX=true; RUN_SKILLS=true; RUN_RULES=true; RUN_PLUGINS=true ;;
+      n|N) RUN_VSIX=false; RUN_SKILLS=false; RUN_RULES=false; RUN_PLUGINS=false ;;
+      "") break ;;
+      *) warn "Invalid choice: $choice" ;;
+    esac
+    # Move cursor up to redraw menu
+    printf "\033[%dA\033[J" "$(( ${#STEPS[@]} + 3 ))"
+  done
+  echo ""
+fi
 
 if [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
   [[ -d "$LOCAL_LIBRARY_PATH" ]] || die "Local path does not exist: $LOCAL_LIBRARY_PATH"
