@@ -132,7 +132,10 @@ SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 : "${CLINE_FORK_REPO:="forcedotcom/cline-fork@agenticChat"}"
 : "${CLINE_RULES_FILE:="src/core/context/instructions/user-instructions/a4dDefaultRules.ts"}"
 if ! declare -p SF_PLUGIN_REPOS &>/dev/null; then
-  SF_PLUGIN_REPOS=("salesforcecli/plugin-templates@main")
+  SF_PLUGIN_REPOS=(
+    "salesforcecli/plugin-templates@main"
+    "forcedotcom/source-deploy-retrieve@main"
+  )
 fi
 
 # Deprecated rule file names (from a4dDefaultRules.ts) to clean up

@@ -10,6 +10,7 @@ Installs the latest AFV skills and rules into the Einstein for Developers VS Cod
 4. **Updates** `a4v-expert-global-rule.md` in `Rules/` from [`forcedotcom/cline-fork`](https://github.com/forcedotcom/cline-fork) *(skipped gracefully if you don't have access)*
 5. **Links** latest SF plugin repos locally to the `sf` CLI:
    - [`salesforcecli/plugin-templates`](https://github.com/salesforcecli/plugin-templates)
+   - [`forcedotcom/source-deploy-retrieve`](https://github.com/forcedotcom/source-deploy-retrieve)
 
    Plugins are cloned to `~/.sf-local-plugins/`, built, and linked via `sf plugins link`.
 
