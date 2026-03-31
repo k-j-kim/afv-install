@@ -131,7 +131,7 @@ SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 : "${AFV_SKILLS_SUBDIR:="skills"}"
 : "${CLINE_FORK_REPO:="forcedotcom/cline-fork@agenticChat"}"
 : "${CLINE_RULES_FILE:="src/core/context/instructions/user-instructions/a4dDefaultRules.ts"}"
-if [[ ${#SF_PLUGIN_REPOS[@]:-0} -eq 0 ]]; then
+if ! declare -p SF_PLUGIN_REPOS &>/dev/null || [[ ${#SF_PLUGIN_REPOS[@]} -eq 0 ]]; then
   SF_PLUGIN_REPOS=("salesforcecli/plugin-templates@main")
 fi
 
