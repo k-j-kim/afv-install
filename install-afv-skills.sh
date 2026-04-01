@@ -33,7 +33,7 @@ RUN_VSIX=true
 RUN_SKILLS=true
 RUN_NIGHTLY=true
 RUN_PLUGINS=true
-INTERACTIVE=false
+SKIP_INTERACTIVE=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --local)
@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
     --no-skills)  RUN_SKILLS=false;  shift ;;
     --no-nightly) RUN_NIGHTLY=false; shift ;;
     --no-plugins) RUN_PLUGINS=false; shift ;;
-    -i|--interactive) INTERACTIVE=true; shift ;;
+    -y|--yes)     SKIP_INTERACTIVE=true; shift ;;
     -h|--help)
       echo "Usage: bash install-afv-skills.sh [OPTIONS]"
       echo ""
@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-skills      Skip AFV skills installation"
       echo "  --no-nightly     Skip SF CLI nightly update"
       echo "  --no-plugins     Skip SF CLI plugin linking"
-      echo "  -i, --interactive  Prompt before each step"
+      echo "  -y, --yes        Skip interactive menu, run all enabled steps"
       echo "  -h, --help       Show this help"
       exit 0 ;;
     *)
@@ -64,7 +64,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── Interactive multi-select ──────────────────────────────────────────────────
-if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
+# Show by default when a terminal is available; skip with -y/--yes
+if ! $SKIP_INTERACTIVE && [[ -e /dev/tty ]]; then
   STEP_NAMES=("Install VSIX extensions" "Install AFV skills" "Update SF CLI to nightly" "Clone/build/link SF plugins")
   STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_NIGHTLY RUN_PLUGINS)
   STEP_COUNT=${#STEP_NAMES[@]}
