@@ -71,7 +71,7 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
   echo -e "${GREEN}Select steps to run${NC} (toggle with number, Enter to confirm):"
   echo ""
 
-  STEPS=("Install VSIX extensions" "Install AFV skills" "Update rules from cline-fork" "Clone/build/link SF plugins")
+  STEPS=("Install VSIX extensions" "Install AFV skills" "Update rules from cline-fork" "Update SF CLI nightly + plugins")
   STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_RULES RUN_PLUGINS)
 
   print_menu() {
@@ -438,9 +438,18 @@ else
   step "Step 4: Skipping rules update (--no-rules)"
 fi
 
-# ── Step 5: Clone, build, and link SF plugin repos ─────────────────────────
+# ── Step 5: Update SF CLI to nightly ─────────────────────────────────────────
 if $RUN_PLUGINS; then
-  step "Step 5: Setting up local SF plugin repos..."
+  step "Step 5: Updating SF CLI to nightly..."
+  npm install @salesforce/cli@nightly --global || warn "Failed to install @salesforce/cli@nightly globally"
+  sf update nightly || warn "Failed to run sf update nightly"
+else
+  step "Step 5: Skipping SF CLI nightly update (--no-plugins)"
+fi
+
+# ── Step 6: Clone, build, and link SF plugin repos ─────────────────────────
+if $RUN_PLUGINS; then
+  step "Step 6: Setting up local SF plugin repos..."
   mkdir -p "$SF_PLUGINS_DIR"
 
   for plugin_entry in "${SF_PLUGIN_REPOS[@]}"; do
@@ -490,7 +499,7 @@ if $RUN_PLUGINS; then
   log "Installing @salesforce/plugin-ui-bundle-dev..."
   sf plugins install @salesforce/plugin-ui-bundle-dev || warn "Failed to install @salesforce/plugin-ui-bundle-dev"
 else
-  step "Step 5: Skipping SF plugin linking (--no-plugins)"
+  step "Step 6: Skipping SF plugin linking (--no-plugins)"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
