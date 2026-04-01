@@ -33,6 +33,7 @@ LOCAL_LIBRARY_PATH=""
 RUN_VSIX=true
 RUN_SKILLS=true
 RUN_RULES=true
+RUN_NIGHTLY=true
 RUN_PLUGINS=true
 INTERACTIVE=false
 while [[ $# -gt 0 ]]; do
@@ -44,6 +45,7 @@ while [[ $# -gt 0 ]]; do
     --no-vsix)    RUN_VSIX=false;    shift ;;
     --no-skills)  RUN_SKILLS=false;  shift ;;
     --no-rules)   RUN_RULES=false;   shift ;;
+    --no-nightly) RUN_NIGHTLY=false; shift ;;
     --no-plugins) RUN_PLUGINS=false; shift ;;
     -i|--interactive) INTERACTIVE=true; shift ;;
     -h|--help)
@@ -54,6 +56,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-vsix        Skip VSIX extension installation"
       echo "  --no-skills      Skip AFV skills installation"
       echo "  --no-rules       Skip rules update from cline-fork"
+      echo "  --no-nightly     Skip SF CLI nightly update"
       echo "  --no-plugins     Skip SF CLI plugin linking"
       echo "  -i, --interactive  Interactively select which steps to run"
       echo "  -h, --help       Show this help"
@@ -71,8 +74,8 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
   echo -e "${GREEN}Select steps to run${NC} (toggle with number, Enter to confirm):"
   echo ""
 
-  STEPS=("Install VSIX extensions" "Install AFV skills" "Update rules from cline-fork" "Clone/build/link SF plugins")
-  STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_RULES RUN_PLUGINS)
+  STEPS=("Install VSIX extensions" "Install AFV skills" "Update rules from cline-fork" "Update SF CLI to nightly" "Clone/build/link SF plugins")
+  STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_RULES RUN_NIGHTLY RUN_PLUGINS)
 
   print_menu() {
     for i in "${!STEPS[@]}"; do
@@ -85,7 +88,7 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
       fi
     done
     echo ""
-    echo -e "  ${BLUE}Toggle: 1-4${NC}  |  ${BLUE}a: all on${NC}  |  ${BLUE}n: all off${NC}  |  ${GREEN}Enter: confirm${NC}"
+    echo -e "  ${BLUE}Toggle: 1-5${NC}  |  ${BLUE}a: all on${NC}  |  ${BLUE}n: all off${NC}  |  ${GREEN}Enter: confirm${NC}"
   }
 
   while true; do
@@ -96,9 +99,10 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
       1) $RUN_VSIX    && RUN_VSIX=false    || RUN_VSIX=true ;;
       2) $RUN_SKILLS   && RUN_SKILLS=false  || RUN_SKILLS=true ;;
       3) $RUN_RULES    && RUN_RULES=false   || RUN_RULES=true ;;
-      4) $RUN_PLUGINS  && RUN_PLUGINS=false || RUN_PLUGINS=true ;;
-      a|A) RUN_VSIX=true; RUN_SKILLS=true; RUN_RULES=true; RUN_PLUGINS=true ;;
-      n|N) RUN_VSIX=false; RUN_SKILLS=false; RUN_RULES=false; RUN_PLUGINS=false ;;
+      4) $RUN_NIGHTLY  && RUN_NIGHTLY=false || RUN_NIGHTLY=true ;;
+      5) $RUN_PLUGINS  && RUN_PLUGINS=false || RUN_PLUGINS=true ;;
+      a|A) RUN_VSIX=true; RUN_SKILLS=true; RUN_RULES=true; RUN_NIGHTLY=true; RUN_PLUGINS=true ;;
+      n|N) RUN_VSIX=false; RUN_SKILLS=false; RUN_RULES=false; RUN_NIGHTLY=false; RUN_PLUGINS=false ;;
       "") break ;;
       *) warn "Invalid choice: $choice" ;;
     esac
@@ -438,9 +442,21 @@ else
   step "Step 4: Skipping rules update (--no-rules)"
 fi
 
-# ── Step 5: Clone, build, and link SF plugin repos ─────────────────────────
+# ── Step 5: Update SF CLI to nightly ─────────────────────────────────────────
+if $RUN_NIGHTLY; then
+  step "Step 5: Updating SF CLI to nightly..."
+  log "Installing @salesforce/cli@nightly globally..."
+  npm install @salesforce/cli@nightly --global || warn "Failed to install @salesforce/cli@nightly globally"
+  log "Running sf update nightly..."
+  sf update nightly || warn "Failed to run sf update nightly"
+  info "SF CLI nightly update complete"
+else
+  step "Step 5: Skipping SF CLI nightly update (--no-nightly)"
+fi
+
+# ── Step 6: Clone, build, and link SF plugin repos ─────────────────────────
 if $RUN_PLUGINS; then
-  step "Step 5: Setting up local SF plugin repos..."
+  step "Step 6: Setting up local SF plugin repos..."
   mkdir -p "$SF_PLUGINS_DIR"
 
   for plugin_entry in "${SF_PLUGIN_REPOS[@]}"; do
@@ -487,7 +503,7 @@ if $RUN_PLUGINS; then
     info "Linked: $plugin_name"
   done
 else
-  step "Step 5: Skipping SF plugin linking (--no-plugins)"
+  step "Step 6: Skipping SF plugin linking (--no-plugins)"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
