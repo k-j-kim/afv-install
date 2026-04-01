@@ -486,6 +486,9 @@ if $RUN_PLUGINS; then
     sf plugins link "$plugin_dir" || { warn "Failed to link $plugin_name"; continue; }
     info "Linked: $plugin_name"
   done
+
+  log "Installing @salesforce/plugin-ui-bundle-dev..."
+  sf plugins install @salesforce/plugin-ui-bundle-dev || warn "Failed to install @salesforce/plugin-ui-bundle-dev"
 else
   step "Step 5: Skipping SF plugin linking (--no-plugins)"
 fi
