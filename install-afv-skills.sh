@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # install-afv-skills.sh
-# Installs latest AFV skills from forcedotcom/afv-library and optionally
-# updates rules from forcedotcom/cline-fork (agenticChat branch).
+# Installs latest AFV skills from forcedotcom/afv-library.
 #
 # Usage:
 #   bash install-afv-skills.sh
@@ -32,7 +31,6 @@ esac
 LOCAL_LIBRARY_PATH=""
 RUN_VSIX=true
 RUN_SKILLS=true
-RUN_RULES=true
 RUN_NIGHTLY=true
 RUN_PLUGINS=true
 INTERACTIVE=false
@@ -44,7 +42,6 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --no-vsix)    RUN_VSIX=false;    shift ;;
     --no-skills)  RUN_SKILLS=false;  shift ;;
-    --no-rules)   RUN_RULES=false;   shift ;;
     --no-nightly) RUN_NIGHTLY=false; shift ;;
     --no-plugins) RUN_PLUGINS=false; shift ;;
     -i|--interactive) INTERACTIVE=true; shift ;;
@@ -55,7 +52,6 @@ while [[ $# -gt 0 ]]; do
       echo "  --local PATH     Use local clone of afv-library"
       echo "  --no-vsix        Skip VSIX extension installation"
       echo "  --no-skills      Skip AFV skills installation"
-      echo "  --no-rules       Skip rules update from cline-fork"
       echo "  --no-nightly     Skip SF CLI nightly update"
       echo "  --no-plugins     Skip SF CLI plugin linking"
       echo "  -i, --interactive  Interactively select which steps to run"
@@ -74,8 +70,8 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
   echo -e "${GREEN}Select steps to run${NC} (toggle with number, Enter to confirm):"
   echo ""
 
-  STEPS=("Install VSIX extensions" "Install AFV skills" "Update rules from cline-fork" "Update SF CLI to nightly" "Clone/build/link SF plugins")
-  STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_RULES RUN_NIGHTLY RUN_PLUGINS)
+  STEPS=("Install VSIX extensions" "Install AFV skills" "Update SF CLI to nightly" "Clone/build/link SF plugins")
+  STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_NIGHTLY RUN_PLUGINS)
 
   print_menu() {
     for i in "${!STEPS[@]}"; do
@@ -88,7 +84,7 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
       fi
     done
     echo ""
-    echo -e "  ${BLUE}Toggle: 1-5${NC}  |  ${BLUE}a: all on${NC}  |  ${BLUE}n: all off${NC}  |  ${GREEN}Enter: confirm${NC}"
+    echo -e "  ${BLUE}Toggle: 1-4${NC}  |  ${BLUE}a: all on${NC}  |  ${BLUE}n: all off${NC}  |  ${GREEN}Enter: confirm${NC}"
   }
 
   while true; do
@@ -98,11 +94,10 @@ if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
     case "$choice" in
       1) $RUN_VSIX    && RUN_VSIX=false    || RUN_VSIX=true ;;
       2) $RUN_SKILLS   && RUN_SKILLS=false  || RUN_SKILLS=true ;;
-      3) $RUN_RULES    && RUN_RULES=false   || RUN_RULES=true ;;
-      4) $RUN_NIGHTLY  && RUN_NIGHTLY=false || RUN_NIGHTLY=true ;;
-      5) $RUN_PLUGINS  && RUN_PLUGINS=false || RUN_PLUGINS=true ;;
-      a|A) RUN_VSIX=true; RUN_SKILLS=true; RUN_RULES=true; RUN_NIGHTLY=true; RUN_PLUGINS=true ;;
-      n|N) RUN_VSIX=false; RUN_SKILLS=false; RUN_RULES=false; RUN_NIGHTLY=false; RUN_PLUGINS=false ;;
+      3) $RUN_NIGHTLY  && RUN_NIGHTLY=false || RUN_NIGHTLY=true ;;
+      4) $RUN_PLUGINS  && RUN_PLUGINS=false || RUN_PLUGINS=true ;;
+      a|A) RUN_VSIX=true; RUN_SKILLS=true; RUN_NIGHTLY=true; RUN_PLUGINS=true ;;
+      n|N) RUN_VSIX=false; RUN_SKILLS=false; RUN_NIGHTLY=false; RUN_PLUGINS=false ;;
       "") break ;;
       *) warn "Invalid choice: $choice" ;;
     esac
@@ -125,14 +120,6 @@ check_deps() {
       missing+=("gh (GitHub CLI)  →  brew install gh")
     else
       missing+=("gh (GitHub CLI)  →  https://github.com/cli/cli/blob/trunk/docs/install_linux.md")
-    fi
-  fi
-
-  if ! command -v python3 &>/dev/null; then
-    if $IS_MACOS; then
-      missing+=("python3          →  brew install python  OR  xcode-select --install")
-    else
-      missing+=("python3          →  sudo apt install python3  OR  sudo dnf install python3")
     fi
   fi
 
@@ -191,32 +178,18 @@ else
   EINSTEIN_DIR="$HOME/.config/Code/User/globalStorage/salesforce.salesforcedx-einstein-gpt"
 fi
 SKILLS_DIR="$EINSTEIN_DIR/Skills-Salesforce"
-RULES_DIR="$EINSTEIN_DIR/Rules"
 SF_PLUGINS_DIR="$HOME/.sf-local-plugins"
 
 # Defaults (used if repos.conf was not loaded, e.g. curl | bash before downloading)
 : "${INSTALL_REPO:="k-j-kim/afv-install@main"}"
 : "${AFV_LIBRARY_REPO:="forcedotcom/afv-library@main"}"
 : "${AFV_SKILLS_SUBDIR:="skills"}"
-: "${CLINE_FORK_REPO:="forcedotcom/cline-fork@agenticChat"}"
-: "${CLINE_RULES_FILE:="src/core/context/instructions/user-instructions/a4dDefaultRules.ts"}"
 if ! declare -p SF_PLUGIN_REPOS &>/dev/null; then
   SF_PLUGIN_REPOS=(
     "salesforcecli/plugin-templates@main"
     "salesforcecli/plugin-deploy-retrieve@main"
   )
 fi
-
-# Deprecated rule file names (from a4dDefaultRules.ts) to clean up
-DEPRECATED_RULES=(
-  "a4dRules-no-edit.md"
-  "a4d-general-rules-no-edit.md"
-  "a4d-app-dev-rules-no-edit.md"
-  "a4d-apex-rules-no-edit.md"
-  "a4d-lwc-rules-no-edit.md"
-  "a4d-mobile-rules-no-edit.md"
-  "a4d-agent-script-rules-no-edit.md"
-)
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 USE_GH=false
@@ -225,7 +198,7 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null 2>&1; then
 elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
   USE_GH=false
 elif [[ -n "$LOCAL_LIBRARY_PATH" ]]; then
-  warn "No GitHub auth found — rules update from $(parse_repo "$CLINE_FORK_REPO") will be skipped"
+  warn "No GitHub auth found — will use local path only"
 else
   die "No GitHub auth found.\n   Run: gh auth login\n   Or:  export GITHUB_TOKEN=<token>"
 fi
@@ -262,19 +235,6 @@ download_tarball() {
   mkdir -p "$tmpdir/repo"
   tar -xzf "$tmpdir/repo.tar.gz" -C "$tmpdir/repo" --strip-components=1
   echo "$tmpdir"
-}
-
-# Downloads a single file's raw content via GitHub API.
-# Returns non-zero silently on failure (caller decides how to handle).
-download_file_content() {
-  local repo="$1" path="$2" branch="$3"
-  if [[ "$USE_GH" == "true" ]]; then
-    gh api "repos/$repo/contents/$path?ref=$branch" --jq '.content' 2>/dev/null | base64 --decode
-  else
-    curl -fsSL \
-      -H "Authorization: Bearer $GITHUB_TOKEN" \
-      "https://raw.githubusercontent.com/$repo/$branch/$path" 2>/dev/null
-  fi
 }
 
 # ── Step 1: Install VSIX extensions ──────────────────────────────────────────
@@ -374,89 +334,21 @@ else
   step "Steps 2-3: Skipping skills installation (--no-skills)"
 fi
 
-# ── Step 4: Rules from cline-fork ─────────────────────────────────────────────
-if $RUN_RULES; then
-  step "Step 4: Attempting to fetch rules from $(parse_repo "$CLINE_FORK_REPO")..."
-  mkdir -p "$RULES_DIR"
-
-  TS_CONTENT=""
-  if TS_CONTENT=$(download_file_content "$(parse_repo "$CLINE_FORK_REPO")" "$CLINE_RULES_FILE" "$(parse_branch "$CLINE_FORK_REPO")" 2>/dev/null); then
-    log "Downloaded $CLINE_RULES_FILE"
-
-    # Extract the a4vExpertGlobalRule template literal content
-    # The pattern is: export const a4vExpertGlobalRule = `...`
-    RULE_FILE="$RULES_DIR/a4v-expert-global-rule.md"
-    # Write TS content to a temp file, then extract the rule via Python
-    TS_TMPFILE=$(mktemp "${TMPDIR:-/tmp}/a4dDefaultRules.XXXXXX")
-    printf '%s' "$TS_CONTENT" > "$TS_TMPFILE"
-
-    python3 - "$TS_TMPFILE" "$RULE_FILE" <<'PYEOF'
-import sys, re
-
-ts_file, rule_file = sys.argv[1], sys.argv[2]
-
-with open(ts_file, 'r') as f:
-    content = f.read()
-
-# Extract content of the a4vExpertGlobalRule template literal
-match = re.search(
-    r'export\s+const\s+a4vExpertGlobalRule\s*=\s*`([\s\S]*?)`\s*\nexport',
-    content
-)
-if not match:
-    match = re.search(
-        r'const\s+a4vExpertGlobalRule\s*=\s*`([\s\S]*?)`',
-        content
-    )
-
-if match:
-    rule_content = match.group(1)
-    rule_content = rule_content.replace('\\`', '`').replace('\\${', '${')
-    with open(rule_file, 'w') as f:
-        f.write(rule_content)
-    print(f"  · Written: {rule_file}")
-else:
-    print("  · WARNING: Could not extract a4vExpertGlobalRule — pattern not matched", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-    rm -f "$TS_TMPFILE"
-    info "Updated: a4v-expert-global-rule.md"
-
-    # Remove deprecated rule files
-    deprecated_removed=0
-    for deprecated in "${DEPRECATED_RULES[@]}"; do
-      target="$RULES_DIR/$deprecated"
-      if [[ -f "$target" ]]; then
-        rm -f "$target"
-        info "Removed deprecated rule: $deprecated"
-        ((deprecated_removed++))
-      fi
-    done
-    [[ $deprecated_removed -gt 0 ]] && log "Removed $deprecated_removed deprecated rule file(s)"
-
-  else
-    warn "Could not access $(parse_repo "$CLINE_FORK_REPO") (no access or repo unavailable)"
-    warn "Skipping rules update — Skills installation still succeeded"
-  fi
-else
-  step "Step 4: Skipping rules update (--no-rules)"
-fi
-
-# ── Step 5: Update SF CLI to nightly ─────────────────────────────────────────
+# ── Step 4: Update SF CLI to nightly ─────────────────────────────────────────
 if $RUN_NIGHTLY; then
-  step "Step 5: Updating SF CLI to nightly..."
+  step "Step 4: Updating SF CLI to nightly..."
   log "Installing @salesforce/cli@nightly globally..."
   npm install @salesforce/cli@nightly --global || warn "Failed to install @salesforce/cli@nightly globally"
   log "Running sf update nightly..."
   sf update nightly || warn "Failed to run sf update nightly"
   info "SF CLI nightly update complete"
 else
-  step "Step 5: Skipping SF CLI nightly update (--no-nightly)"
+  step "Step 4: Skipping SF CLI nightly update (--no-nightly)"
 fi
 
-# ── Step 6: Clone, build, and link SF plugin repos ─────────────────────────
+# ── Step 5: Clone, build, and link SF plugin repos ─────────────────────────
 if $RUN_PLUGINS; then
-  step "Step 6: Setting up local SF plugin repos..."
+  step "Step 5: Setting up local SF plugin repos..."
   mkdir -p "$SF_PLUGINS_DIR"
 
   for plugin_entry in "${SF_PLUGIN_REPOS[@]}"; do
@@ -503,12 +395,11 @@ if $RUN_PLUGINS; then
     info "Linked: $plugin_name"
   done
 else
-  step "Step 6: Skipping SF plugin linking (--no-plugins)"
+  step "Step 5: Skipping SF plugin linking (--no-plugins)"
 fi
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 log "Done!"
 echo "   Skills dir  : $SKILLS_DIR"
-echo "   Rules dir   : $RULES_DIR"
 echo "   Plugins dir : $SF_PLUGINS_DIR"
