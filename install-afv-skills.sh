@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --no-skills      Skip AFV skills installation"
       echo "  --no-nightly     Skip SF CLI nightly update"
       echo "  --no-plugins     Skip SF CLI plugin linking"
-      echo "  -i, --interactive  Interactively select which steps to run"
+      echo "  -i, --interactive  Prompt before each step"
       echo "  -h, --help       Show this help"
       exit 0 ;;
     *)
@@ -63,46 +63,71 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── Interactive step selection ───────────────────────────────────────────────
+# ── Interactive multi-select ──────────────────────────────────────────────────
 if $INTERACTIVE && [[ -t 0 || -t 2 ]]; then
-  # Read from /dev/tty so it works even when piped via curl | bash
-  echo ""
-  echo -e "${GREEN}Select steps to run${NC} (toggle with number, Enter to confirm):"
-  echo ""
-
-  STEPS=("Install VSIX extensions" "Install AFV skills" "Update SF CLI to nightly" "Clone/build/link SF plugins")
+  STEP_NAMES=("Install VSIX extensions" "Install AFV skills" "Update SF CLI to nightly" "Clone/build/link SF plugins")
   STEP_VARS=(RUN_VSIX RUN_SKILLS RUN_NIGHTLY RUN_PLUGINS)
+  STEP_COUNT=${#STEP_NAMES[@]}
+  CURSOR=0
 
-  print_menu() {
-    for i in "${!STEPS[@]}"; do
+  draw_menu() {
+    for i in "${!STEP_NAMES[@]}"; do
       local var="${STEP_VARS[$i]}"
-      local state="${!var}"
-      if $state; then
-        echo -e "  ${GREEN}[x]${NC} $((i+1)). ${STEPS[$i]}"
-      else
-        echo -e "  ${YELLOW}[ ]${NC} $((i+1)). ${STEPS[$i]}"
-      fi
+      local on="${!var}"
+      local marker; $on && marker="${GREEN}[x]${NC}" || marker="${YELLOW}[ ]${NC}"
+      local arrow="   "
+      [[ $i -eq $CURSOR ]] && arrow="${BLUE} ▸ ${NC}"
+      echo -e "${arrow}${marker} ${STEP_NAMES[$i]}"
     done
     echo ""
-    echo -e "  ${BLUE}Toggle: 1-4${NC}  |  ${BLUE}a: all on${NC}  |  ${BLUE}n: all off${NC}  |  ${GREEN}Enter: confirm${NC}"
+    echo -e "  ${BLUE}↑/↓${NC} move  ${BLUE}space${NC} toggle  ${BLUE}a${NC} all  ${BLUE}n${NC} none  ${GREEN}enter${NC} confirm"
   }
 
+  clear_menu() {
+    printf "\033[%dA\033[J" "$(( STEP_COUNT + 2 ))"
+  }
+
+  echo ""
+  echo -e "${GREEN}Select steps to run:${NC}"
+  echo ""
+  draw_menu
+
   while true; do
-    print_menu
-    echo -n "> "
-    read -r choice </dev/tty
-    case "$choice" in
-      1) $RUN_VSIX    && RUN_VSIX=false    || RUN_VSIX=true ;;
-      2) $RUN_SKILLS   && RUN_SKILLS=false  || RUN_SKILLS=true ;;
-      3) $RUN_NIGHTLY  && RUN_NIGHTLY=false || RUN_NIGHTLY=true ;;
-      4) $RUN_PLUGINS  && RUN_PLUGINS=false || RUN_PLUGINS=true ;;
-      a|A) RUN_VSIX=true; RUN_SKILLS=true; RUN_NIGHTLY=true; RUN_PLUGINS=true ;;
-      n|N) RUN_VSIX=false; RUN_SKILLS=false; RUN_NIGHTLY=false; RUN_PLUGINS=false ;;
-      "") break ;;
-      *) warn "Invalid choice: $choice" ;;
+    # Read a single keypress
+    IFS= read -rsn1 key </dev/tty
+    # Handle escape sequences (arrow keys)
+    if [[ "$key" == $'\x1b' ]]; then
+      read -rsn2 seq </dev/tty
+      key+="$seq"
+    fi
+
+    case "$key" in
+      $'\x1b[A'|k)  # Up arrow or k
+        (( CURSOR = (CURSOR - 1 + STEP_COUNT) % STEP_COUNT ))
+        ;;
+      $'\x1b[B'|j)  # Down arrow or j
+        (( CURSOR = (CURSOR + 1) % STEP_COUNT ))
+        ;;
+      " ")  # Space — toggle current item
+        local_var="${STEP_VARS[$CURSOR]}"
+        if ${!local_var}; then
+          eval "$local_var=false"
+        else
+          eval "$local_var=true"
+        fi
+        ;;
+      a|A)  # All on
+        for v in "${STEP_VARS[@]}"; do eval "$v=true"; done
+        ;;
+      n|N)  # All off
+        for v in "${STEP_VARS[@]}"; do eval "$v=false"; done
+        ;;
+      "")  # Enter — confirm
+        break
+        ;;
     esac
-    # Move cursor up to redraw menu
-    printf "\033[%dA\033[J" "$(( ${#STEPS[@]} + 3 ))"
+    clear_menu
+    draw_menu
   done
   echo ""
 fi
